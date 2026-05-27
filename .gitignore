@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment / secrets
+.env
+*.json
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+server/tmp/*
+!server/tmp/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Zone.Identifier (WSL)
+*Zone.Identifier
