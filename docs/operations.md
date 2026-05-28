@@ -142,6 +142,31 @@ cd ~/projects/LineTaskCollection/server
 
 ---
 
+## Cloud Run のログの見方
+
+アプリは structured logging（stdout に JSON）でログを出す。Cloud Logging は `severity` と `message` を認識する。
+
+**注意**: `gcloud run services logs read` の簡易ビューは JSON ログ（jsonPayload）を**空行で表示してしまう**（textPayload しか表示しない CLI の制約）。アプリ層ログ（`[JOIN]`、`[GCS]`、`[SIGNATURE]` 等）を見るには次のいずれかを使う。
+
+### 方法1: gcloud logging read（推奨）
+
+```bash
+gcloud logging read \
+  "resource.type=cloud_run_revision AND resource.labels.service_name=linetask-receive AND jsonPayload.message:*" \
+  --project=probox-linetask-prod --limit=30 \
+  --format="table(timestamp, severity, jsonPayload.name, jsonPayload.message)"
+```
+
+### 方法2: Cloud Run コンソールの「ログ」タブ
+
+Cloud Run → linetask-receive → ログ。`message` フィールドが要約行に表示され、severity でフィルタもできる。
+
+### リクエストアクセスログ（uvicorn）を見る
+
+GET/POST のアクセスログは textPayload なので `gcloud run services logs read linetask-receive --region=asia-northeast1 --limit=30` で見える。
+
+---
+
 ## LINE Webhook URL 切替手順（けいすけ手作業）
 
 Cloud Run デプロイ後に実施:
