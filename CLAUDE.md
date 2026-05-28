@@ -310,7 +310,7 @@ spec §7 を踏襲。各 Phase の完了基準は着手時に Cowork と確定�
 | Phase | 内容 | 状態 |
 |-------|------|------|
 | Phase A | LINE 公式アカウント作成 + 受信疎通(ngrok 等で `[JOIN]`/ファイル受信を確認) | **完走(2026-05-28)** |
-| Phase B | Cloud Run 受信サーバー(GCS + Firestore 書き込み)を常時起動に | **着手中(2026-05-28 kickoff)** |
+| Phase B | Cloud Run 受信サーバー(GCS + Firestore 書き込み)を常時起動に | **完走(2026-05-28)** |
 | Phase C | PC 側処理(Cowork 実行)— pull → Claude 仕分け → SharePoint 格納 → Notion 記録 | 未着手 |
 | Phase D | Cowork 用アーカイブ検索ヘルパー(Skill)を整備 | 未着手 |
 
