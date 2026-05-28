@@ -311,7 +311,7 @@ spec §7 を踏襲。各 Phase の完了基準は着手時に Cowork と確定�
 |-------|------|------|
 | Phase A | LINE 公式アカウント作成 + 受信疎通(ngrok 等で `[JOIN]`/ファイル受信を確認) | **完走(2026-05-28)** |
 | Phase B | Cloud Run 受信サーバー(GCS + Firestore 書き込み)を常時起動に | **完走(2026-05-28)** |
-| Phase C | PC 側処理(Cowork 実行)— pull → Claude 仕分け → SharePoint 格納 → Notion 記録 | 未着手 |
+| Phase C | PC 側処理(Cowork 実行)— pull → Claude 仕分け → SharePoint 格納 → Notion 記録 | **着手中(2026-05-28 kickoff)** |
 | Phase D | Cowork 用アーカイブ検索ヘルパー(Skill)を整備 | 未着手 |
 
 ---
@@ -441,6 +441,44 @@ Cowork 判断で確定した「以後の実装で従うルール」をここに�
 - Startup CPU Boost ON(再起動時の起動高速化)
 - 理由: LINE Webhook の取りこぼし防止。月額 ¥1,000〜2,000 程度の上振れは業務影響と引き換えに許容
 - 月額が想定を超えた場合の見直しトリガー: GCP Budget Alert を別途設定(けいすけ手作業、未実施)
+
+### Phase C 実装方針(2026-05-28 確定)
+
+#### Notion 連携
+
+1. **既存 DB「設計タスク管理」を活用**、新規 DB を作らない、新規フィールドも追加しない
+2. **既存「仕分け待ち」優先度タグを使用**(LINE 受信ファイルは全件これで投入)
+3. **専用 Integration「LineTaskBot」を新規作成**、けいすけ手動で設計タスク管理 DB に招待
+4. **作成者フィールドが LineTaskBot になることでけいすけ手動投入と区別**
+
+#### Notion タスクの粒度
+
+5. **1 ファイル = 1 タスク**(複数ファイル同時受信時は連投をメタで紐付け、集約はけいすけ手動)
+
+#### Notion タスク命名
+
+6. **タスク名: `【LINE】YYYY-MM-DD Claude推測タイトル`**
+7. **タイトル: Claude が完全自動推測**(ファイル内容＋直近の text メッセージ＋ファイル名から)
+8. **備考フィールドに Claude 推測詳細**(案件候補・確信度・判断理由・同 groupId 内の関連メッセージ ID)
+
+#### SharePoint 保存先
+
+9. **個別ファイル**: `案件名/09.受領資料/YYYY-MM-DD タイトル.<ext>`
+10. **議事ログ**: `案件名/09.LINEやりとり資料/YYYY-MM-DD 議事ログ.md`
+11. **09 番号は意図的に既存「09.受領資料」と並列、両方 09**
+12. **議事ログ Markdown**: テキスト＋画像リンク(個別ファイルへの相対パス)が時系列に並ぶ形式
+13. **書き込み手段**: PC の OneDrive 同期フォルダへのファイル書き込みのみ(Microsoft Graph API 不使用、Azure 登録不要)
+
+#### ステージング・削除
+
+14. **GCS pending/ は仕分け確定まで保持**、SharePoint 移動後に GCS から削除
+15. **GCS ライフサイクル**: 90 日経過の pending/ オブジェクト自動削除(保険)
+16. **Firestore `intake_messages.status` は pending → done に更新**、ドキュメントは削除しない(アーカイブ)
+
+#### Cowork 許可フォルダ
+
+17. **`C:\Users\knaka\OneDrive - 株式会社ビギン\@@設計\51.LINE投稿ボット\pc_worker\`** に PC 側スクリプトと `.env` を配置
+18. リポジトリの `pc_worker/` 配下を上記パスにコピーして運用(OneDrive 同期遅延を避けるため)
 
 > 新しい決定をしたら、その都度ここを更新する。
 

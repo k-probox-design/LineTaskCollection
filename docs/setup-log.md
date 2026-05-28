@@ -27,3 +27,11 @@
 - Service URL: `https://linetask-receive-538691653180.asia-northeast1.run.app`
 - 残課題対応: min-instances=1 + cpu-boost、python-json-logger による structured logging（4.1.0、v3+ の import パス）、ADC 手順を operations.md に追記
 - pytest 10/10 パス
+
+## 2026-05-28 — Phase C PC 側仕分け処理
+
+- `pc_worker/` を独立 Python パッケージとして新設（`server/` とは依存を共有しない）
+- 依存: anthropic 0.104.1, notion-client 3.1.0, google-cloud-storage/firestore, python-dotenv, python-json-logger
+- モジュール: config / pull / classify / notion_writer / log_writer / sharepoint_writer / orchestrator / main
+- 仕分けは `claude-sonnet-4-6` + `messages.parse`（構造化出力）+ プロンプトキャッシュ
+- pytest 15/15 パス（外部 API 全モック）

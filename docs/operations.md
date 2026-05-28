@@ -207,6 +207,106 @@ gcloud auth application-default print-access-token
 
 ---
 
+## Phase C: Notion Integration「LineTaskBot」のセットアップ（けいすけ手作業）
+
+### Step 1: Integration「LineTaskBot」作成
+
+1. [Notion Integrations](https://www.notion.so/profile/integrations) を開く
+2. 「+ 新しいインテグレーション」をクリック
+3. 名前: **LineTaskBot**、関連付けるワークスペース: ビギン
+4. タイプ: 「内部インテグレーション」
+5. 「保存」→ 詳細画面で **「内部インテグレーションシークレット」をコピー**（`secret_xxxxx...` または `ntn_xxxxx...` 形式）
+6. シークレットは **後で `pc_worker/.env` に直接貼り付け**、チャットや受け渡しフォルダには貼らない（`NOTION_API_KEY`）
+
+### Step 2: 設計タスク管理 DB に LineTaskBot を招待
+
+1. Notion で「設計タスク管理」DB のページを開く
+2. 右上「…」→「接続」→ **LineTaskBot** を選択 →「確認」
+
+### Step 3: Database ID を控える
+
+1. DB ページの URL を開く（例: `https://www.notion.so/xxxxxxxx?v=yyyyyyy`）
+2. URL の `?v=` より前の 32 文字 hex が **Database ID**
+3. `pc_worker/.env` の `NOTION_DATABASE_ID_DESIGN_TASK` に貼り付け
+
+> **実地確認時の注意**: `pc_worker/app/notion_writer.py` 冒頭の `PROP_TITLE` / `PROP_PRIORITY` / `PROP_NOTE` / `PROP_ONEDRIVE` は設計タスク管理 DB の実際のプロパティ名を推定値で定義している。DB の実際のプロパティ名と相違があれば、この定数だけ修正する。
+
+---
+
+## Phase C: SharePoint 同期フォルダのルートパス確認（けいすけ手作業）
+
+PC の OneDrive 同期フォルダで、案件フォルダの**親ディレクトリ**のパスを確認する。例:
+
+```
+C:\Users\knaka\OneDrive - 株式会社ビギン\Documents\案件\
+└── コスモス ソラプロ\
+    ├── 09.受領資料\        ← 個別ファイルの格納先
+    └── 09.LINEやりとり資料\ ← 議事ログの格納先
+```
+
+上の例なら `C:\Users\knaka\OneDrive - 株式会社ビギン\Documents\案件\` を `pc_worker/.env` の `SHAREPOINT_ROOT` に貼り付ける（シークレットではないのでチャット共有可）。
+
+---
+
+## Phase C: pc_worker の起動（Cowork 実行）
+
+### セットアップ
+
+```bash
+cd pc_worker
+python -m venv .venv
+source .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+cp .env.example .env
+# ANTHROPIC_API_KEY / NOTION_API_KEY / NOTION_DATABASE_ID_DESIGN_TASK / SHAREPOINT_ROOT を入力
+# GCP は ADC（gcloud auth application-default login）で解決
+```
+
+### 実行
+
+```bash
+python -m app.main
+```
+
+1 回実行して Firestore `status=pending` を全件さばいて終了する（常駐しない）。確信度 0.8 以上は SharePoint 格納 + Notion 更新 + GCS 削除、未満は「仕分け待ち」のまま残す。
+
+### テスト
+
+```bash
+pytest tests/ -v
+```
+
+外部 API（GCS / Firestore / Notion / Anthropic）はすべてモック。
+
+### Cowork 許可フォルダへの配置
+
+リポジトリの `pc_worker/` 配下を `C:\Users\knaka\OneDrive - 株式会社ビギン\@@設計\51.LINE投稿ボット\pc_worker\` にコピーして運用する（鍵・スクリプトは Cowork 許可フォルダ内に置く）。
+
+---
+
+## Phase C: GCS ライフサイクルルール設定（けいすけ手作業 / Cloud Shell）
+
+仕分け取り残しの保険として、90 日経過の `pending/` オブジェクトを自動削除する。
+
+```bash
+cat > /tmp/lifecycle.json <<'EOF'
+{
+  "lifecycle": {
+    "rule": [
+      {
+        "action": {"type": "Delete"},
+        "condition": {"age": 90, "matchesPrefix": ["pending/"]}
+      }
+    ]
+  }
+}
+EOF
+gcloud storage buckets update gs://probox-linetask-prod-intake --lifecycle-file=/tmp/lifecycle.json
+rm /tmp/lifecycle.json
+```
+
+---
+
 ## トラブルシュート
 
 ### ボットを招待した直後にグループから退出する
