@@ -14,7 +14,6 @@ logger = logging.getLogger("line_webhook")
 router = APIRouter()
 
 TMP_DIR = Path(__file__).resolve().parent.parent / "tmp"
-TMP_DIR.mkdir(exist_ok=True)
 
 EXT_MAP = {
     "image": ".jpg",
@@ -49,6 +48,7 @@ def _ext_for_file_message(event: dict) -> str:
 
 
 def _save_local(data: bytes, message_id: str, ext: str) -> Path:
+    TMP_DIR.mkdir(exist_ok=True)
     timestamp = int(time.time())
     dest = TMP_DIR / f"{timestamp}_{message_id}{ext}"
     dest.write_bytes(data)
