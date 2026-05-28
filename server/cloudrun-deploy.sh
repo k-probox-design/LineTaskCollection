@@ -16,5 +16,6 @@ gcloud run deploy ${SERVICE_NAME} \
   --memory 512Mi \
   --cpu 1 \
   --max-instances 3 \
-  --min-instances 0 \
+  --min-instances 1 \
+  --cpu-boost \
   --timeout 60s

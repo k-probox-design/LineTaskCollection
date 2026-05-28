@@ -153,6 +153,35 @@ Cloud Run デプロイ後に実施:
 
 ---
 
+## WSL2 で ADC（Application Default Credentials）を設定する
+
+ローカル開発で本番 GCP（Firestore / GCS）に直書きするとき、ADC が必要。
+本番 Cloud Run はサービスアカウントで動くため ADC 不要だが、ローカルから実機テストしたい場合に使う。
+WSL2 ではブラウザ連携が不安定（`gio: Operation not supported`）なため `--no-browser` フローで設定する。
+
+1. WSL2 で以下を実行:
+   ```bash
+   gcloud auth application-default login --no-browser
+   ```
+2. 出力された URL をコピーして、Windows 側のブラウザに貼り付け
+3. Google アカウントで認証
+4. リダイレクト先の URL（`http://localhost...` のような文字列）をコピー
+5. WSL2 のターミナルに戻って、表示されているプロンプトにペースト
+6. `Credentials saved to file: ...` が出れば成功
+
+確認:
+```bash
+gcloud auth application-default print-access-token
+```
+何か文字列が出れば OK。
+
+### トラブル時の対応
+
+- `gcloud` が見つからない場合: Google Cloud SDK が未インストール。`$HOME/google-cloud-sdk/bin` を PATH に追加するか、`$HOME/google-cloud-sdk/bin/gcloud` とフルパスで呼ぶ
+- `--no-browser` でも CSRF state mismatch が出る場合: 一度 `gcloud auth application-default revoke` してからやり直す。ブラウザのタブは 1 つだけ開いて操作する
+
+---
+
 ## トラブルシュート
 
 ### ボットを招待した直後にグループから退出する

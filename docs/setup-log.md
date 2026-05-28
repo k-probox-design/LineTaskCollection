@@ -19,3 +19,11 @@
 - gcs.py / firestore.py を新設、config.py に GCS_BUCKET / FIRESTORE_PROJECT / LOCAL_FALLBACK を追加
 - Dockerfile (python:3.11-slim) + cloudrun-deploy.sh を作成
 - pytest 9/9 パス（署名検証 2 + process_event 4 + gcs 1 + firestore 2）
+
+## 2026-05-28 — Cloud Run デプロイ + Phase B 残課題対応
+
+- WSL2 に gcloud 未インストールだったため Google Cloud SDK 570.0.0 をホームディレクトリに導入
+- 1 回目デプロイ失敗: 非 root コンテナで import 時の `/app/tmp` mkdir が PermissionError → 遅延作成に修正
+- Service URL: `https://linetask-receive-538691653180.asia-northeast1.run.app`
+- 残課題対応: min-instances=1 + cpu-boost、python-json-logger による structured logging（4.1.0、v3+ の import パス）、ADC 手順を operations.md に追記
+- pytest 10/10 パス

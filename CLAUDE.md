@@ -435,6 +435,13 @@ Cowork 判断で確定した「以後の実装で従うルール」をここに�
 5. **Cloud Run デプロイ権限分担**: **GCP プロジェクト作成・初回 IAM 設定・サービスアカウント作成・GCS バケット作成・Firestore DB 作成・Secret Manager への鍵登録はけいすけ手作業**、**`gcloud run deploy` 以降は Claude Code 実施**
    - 理由: 課金・権限を握る初期設定はけいすけが直接、デプロイ手順は autonomous
 
+### Cloud Run 稼働方針(2026-05-28 確定)
+
+- min-instances=1(常時 1 インスタンス常駐、cold start 排除)
+- Startup CPU Boost ON(再起動時の起動高速化)
+- 理由: LINE Webhook の取りこぼし防止。月額 ¥1,000〜2,000 程度の上振れは業務影響と引き換えに許容
+- 月額が想定を超えた場合の見直しトリガー: GCP Budget Alert を別途設定(けいすけ手作業、未実施)
+
 > 新しい決定をしたら、その都度ここを更新する。
 
 ---
