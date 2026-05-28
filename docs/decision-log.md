@@ -13,3 +13,25 @@ line-bot-sdk v3 の `LineBotApi.get_message_content()` は同期 I/O。FastAPI �
 ### Phase A では Webhook を同期処理
 
 画像 1 枚なら数秒以内で完了する想定。5 秒を超えるケース（大きい動画など）が出た場合は Phase B で BackgroundTasks に分離する。
+
+## 2026-05-28 — Phase B 判断（Cowork 確定、CLAUDE.md に永続決定として記載済み）
+
+### Firestore / GCS Emulator は使わず本番直書き
+
+Emulator の学習コストが見合わない。Phase A〜B は本番 1 プロジェクト方針と整合し、小規模なら無料枠内で収まる。
+
+### テキストメッセージも Firestore に保存
+
+受信ログ＝検索アーカイブの方針と整合。テキストも過去検索で使う価値がある。ファイル本体は保存せず、メタ＋ text フィールドのみ。
+
+### BackgroundTasks でコンテンツダウンロードを分離
+
+Cloud Run のタイムアウト＋ LINE Webhook の即 200 要件。画像複数枚や動画で Webhook 応答が遅れるリスクを排除。FastAPI の `BackgroundTasks` を使用。
+
+### line-bot-sdk-python を依存から外す
+
+Phase A で SDK を入れていたが未使用。自前検証＋httpx が async と相性がよく、Phase B でも継続。未使用依存を残さない方針。
+
+### コンテンツダウンロードを同期 httpx.Client に変更
+
+BackgroundTasks はスレッドプールで実行されるため、async I/O を使う意味が薄い。`httpx.Client`（同期）でシンプルに。GCS の `upload_from_string` も同期 API のため統一。

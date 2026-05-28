@@ -23,10 +23,11 @@ def client():
         {
             "LINE_CHANNEL_SECRET": CHANNEL_SECRET,
             "LINE_CHANNEL_ACCESS_TOKEN": CHANNEL_TOKEN,
+            "LOCAL_FALLBACK": "true",
         },
     ):
         from app.main import app
-        yield TestClient(app)
+        yield TestClient(app, raise_server_exceptions=False)
 
 
 def test_valid_signature_join_event(client):

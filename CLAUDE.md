@@ -309,8 +309,8 @@ spec §7 を踏襲。各 Phase の完了基準は着手時に Cowork と確定�
 
 | Phase | 内容 | 状態 |
 |-------|------|------|
-| Phase A | LINE 公式アカウント作成 + 受信疎通(ngrok 等で `[JOIN]`/ファイル受信を確認) | **着手中(2026-05-27 kickoff)** |
-| Phase B | Cloud Run 受信サーバー(GCS + Firestore 書き込み)を常時起動に | 未着手 |
+| Phase A | LINE 公式アカウント作成 + 受信疎通(ngrok 等で `[JOIN]`/ファイル受信を確認) | **完走(2026-05-28)** |
+| Phase B | Cloud Run 受信サーバー(GCS + Firestore 書き込み)を常時起動に | **着手中(2026-05-28 kickoff)** |
 | Phase C | PC 側処理(Cowork 実行)— pull → Claude 仕分け → SharePoint 格納 → Notion 記録 | 未着手 |
 | Phase D | Cowork 用アーカイブ検索ヘルパー(Skill)を整備 | 未着手 |
 
@@ -421,6 +421,19 @@ Cowork 判断で確定した「以後の実装で従うルール」をここに�
 - 初期 commit は `main` に直 push 可。CLAUDE.md / README.md / `docs/line-intake-design.md` / ディレクトリ雛形 / `.gitignore` を含める
 - Phase A の実装着手から `work/YYYY-MM-DD` ブランチ運用を開始
 - `.gitignore` は Python 標準 + `.env` + `*.json`(service account) + `.idea/` `.vscode/` + `*.log`
+
+### Phase B 実装方針(2026-05-28 確定)
+
+1. **開発時の DB/Storage**: Firestore / GCS Emulator は使わず、**本番プロジェクト `probox-linetask-prod` に直書き**で開発する
+   - 理由: Phase A〜B は本番 1 プロジェクト方針と整合、Emulator 学習コストが見合わない、Firestore/GCS とも小規模なら無料枠内
+2. **テキストメッセージの扱い**: text タイプも **Firestore `intake_messages` に保存する**(ファイル本体は保存しない、メタ＋ text フィールドのみ)
+   - 理由: 受信ログ＝検索アーカイブの方針と整合、テキストもアーカイブ価値が高い
+3. **コンテンツダウンロード**: FastAPI **BackgroundTasks に分離**して Webhook には即 200 を返す
+   - 理由: Cloud Run のタイムアウト＋ LINE Webhook の即 200 要件、画像複数や動画で詰まらないため
+4. **line-bot-sdk-python**: **依存から外す**、自前検証＋httpx を継続
+   - 理由: Phase A の判断(async との相性が悪い)が Phase B でも有効、未使用依存を残さない
+5. **Cloud Run デプロイ権限分担**: **GCP プロジェクト作成・初回 IAM 設定・サービスアカウント作成・GCS バケット作成・Firestore DB 作成・Secret Manager への鍵登録はけいすけ手作業**、**`gcloud run deploy` 以降は Claude Code 実施**
+   - 理由: 課金・権限を握る初期設定はけいすけが直接、デプロイ手順は autonomous
 
 > 新しい決定をしたら、その都度ここを更新する。
 
