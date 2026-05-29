@@ -7,15 +7,10 @@ from pathlib import Path
 
 import typer
 
-from app import config, notion_writer, pull, sharepoint_writer, winpath
+from app import config, folders, notion_writer, pull, sharepoint_writer, winpath
 from app.config import settings
 
 app = typer.Typer(add_completion=False, help="LineTask pc_cli — GCS/Notion/SharePoint の薄い API ラッパー")
-
-_KIND_TO_SUBFOLDER = {
-    "受領資料": "09.受領資料",
-    "LINEやりとり資料": "09.LINEやりとり資料",
-}
 
 
 def _init_logging(log_run_id: str | None) -> str:
@@ -120,25 +115,42 @@ def update_task_cmd(
     _emit(result)
 
 
+@app.command("list-case-folders")
+def list_case_folders_cmd(
+    root: str = typer.Option(None, "--root"),
+    max_depth: int = typer.Option(3, "--max-depth"),
+    log_run_id: str = typer.Option(None, "--log-run-id"),
+) -> None:
+    """SHAREPOINT_ROOT 配下を再帰スキャンし、案件フォルダ候補一覧を JSON 配列で出力。"""
+    _init_logging(log_run_id)
+    try:
+        result = folders.list_case_folders(root, max_depth)
+    except FileNotFoundError as e:
+        _fail("root_not_found", str(e))
+    except Exception as e:
+        _fail("list-case-folders failed", str(e))
+    _emit(result)
+
+
 @app.command("place-file")
 def place_file_cmd(
     src: str = typer.Option(..., "--src"),
-    case: str = typer.Option(..., "--case"),
-    kind: str = typer.Option(..., "--kind"),
+    case_folder: str = typer.Option(..., "--case-folder"),
     title: str = typer.Option(..., "--title"),
+    log_date: str = typer.Option(None, "--date"),
     log_run_id: str = typer.Option(None, "--log-run-id"),
 ) -> None:
-    """SharePoint 案件フォルダにファイル配置。kind は 受領資料 / LINEやりとり資料。"""
+    """案件フォルダ(絶対パス)配下の 09.LINEやりとり資料/ にファイル配置。"""
     _init_logging(log_run_id)
-    subfolder = _KIND_TO_SUBFOLDER.get(kind)
-    if subfolder is None:
-        _fail("invalid kind", f"kind は {list(_KIND_TO_SUBFOLDER)} のいずれか: {kind}")
     src_path = Path(src)
     if not src_path.exists():
         _fail("src not found", src)
-    filename = f"{date.today().isoformat()} {title}{src_path.suffix}"
+    day = log_date or date.today().isoformat()
+    filename = f"{day} {title}{src_path.suffix}"
     try:
-        dest = sharepoint_writer.write_to_case_folder(case, subfolder, filename, src_path.read_bytes())
+        dest, created = sharepoint_writer.place_in_case_folder(case_folder, filename, src_path.read_bytes())
+    except FileNotFoundError as e:
+        _fail("case_folder_not_found", str(e))
     except Exception as e:
         _fail("place-file failed", str(e))
     unix = str(dest)
@@ -146,27 +158,33 @@ def place_file_cmd(
         "destination_unix": unix,
         "destination_windows": winpath.unix_to_windows(unix),
         "onedrive_link": sharepoint_writer.to_onedrive_link(dest),
+        "created_subfolder": created,
     })
 
 
 @app.command("write-log")
 def write_log_cmd(
-    case: str = typer.Option(..., "--case"),
+    case_folder: str = typer.Option(..., "--case-folder"),
     log_date: str = typer.Option(..., "--date"),
-    content: str = typer.Option(..., "--content"),
+    content: str = typer.Option(..., "--content", help="議事ログ Markdown。'-' で stdin から読む"),
     log_run_id: str = typer.Option(None, "--log-run-id"),
 ) -> None:
-    """議事ログ Markdown を <案件名>/09.LINEやりとり資料/<date> 議事ログ.md に書き込み（上書き）。"""
+    """議事ログ Markdown を <案件フォルダ>/09.LINEやりとり資料/<date> 議事ログ.md に書き込み（上書き）。"""
     _init_logging(log_run_id)
+    text = sys.stdin.read() if content == "-" else content
     filename = f"{log_date} 議事ログ.md"
     try:
-        dest = sharepoint_writer.write_to_case_folder(
-            case, "09.LINEやりとり資料", filename, content, overwrite=True
-        )
+        dest, created = sharepoint_writer.place_in_case_folder(case_folder, filename, text, overwrite=True)
+    except FileNotFoundError as e:
+        _fail("case_folder_not_found", str(e))
     except Exception as e:
         _fail("write-log failed", str(e))
     unix = str(dest)
-    _emit({"destination_unix": unix, "destination_windows": winpath.unix_to_windows(unix)})
+    _emit({
+        "destination_unix": unix,
+        "destination_windows": winpath.unix_to_windows(unix),
+        "created_subfolder": created,
+    })
 
 
 @app.command("mark-done")
