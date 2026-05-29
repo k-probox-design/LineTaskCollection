@@ -248,7 +248,9 @@ C:\Users\knaka\OneDrive - 株式会社ビギン\Documents\案件\
 
 ---
 
-## Phase C: pc_worker の起動（Cowork 実行）
+## Phase C': pc_cli の使い方（Cowork 主導仕分け）
+
+Phase C' で仕分け判断は **Cowork（Opus）が担う**。pc_cli は GCS pull / Notion write / SharePoint write の**薄い API ラッパー**で、判定ロジックを持たない。Cowork が Skill 経由で各サブコマンドを bash で順序立てて呼ぶ。
 
 ### セットアップ
 
@@ -258,17 +260,79 @@ python -m venv .venv
 source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 cp .env.example .env
-# ANTHROPIC_API_KEY / NOTION_API_KEY / NOTION_DATABASE_ID_DESIGN_TASK / SHAREPOINT_ROOT を入力
-# GCP は ADC（gcloud auth application-default login）で解決
+# NOTION_API_KEY / NOTION_DATABASE_ID_DESIGN_TASK / SHAREPOINT_ROOT / TMP_DOWNLOAD_DIR / LOG_OUTPUT_DIR を入力
+# GCP は ADC（gcloud auth application-default login）で解決。ANTHROPIC_API_KEY は不要（Cowork が判定）
 ```
 
-### 実行
+### 起動
 
 ```bash
-python -m app.main
+python -m app.cli <subcommand> [options]
 ```
 
-1 回実行して Firestore `status=pending` を全件さばいて終了する（常駐しない）。確信度 0.8 以上は SharePoint 格納 + Notion 更新 + GCS 削除、未満は「仕分け待ち」のまま残す。
+stdout は結果 JSON のみ、ログは stderr（+ `LOG_OUTPUT_DIR` ファイル）に出る。エラー時は exit code != 0 で stderr に `{"error": "...", "detail": "..."}`。
+
+### サブコマンド一覧（9 個）
+
+| サブコマンド | 役割 |
+|------------|------|
+| `pull-pending [--limit=50]` | Firestore status=pending をメタのみ JSON 配列で出力（GCS は触らない）|
+| `download <doc_id> [--dest-dir]` | GCS バイナリを DL、unix/windows 両形式のパスを返す |
+| `list-cases [--days=90]` | Notion から直近 N 日更新の案件名候補を出力 |
+| `write-task --case --title [--priority=仕分け待ち] [--note] [--onedrive-link]` | Notion 新規 row |
+| `update-task --page-id [--case --title --priority --note --onedrive-link]` | Notion 部分更新（優先度変更で仕分け完了扱い）|
+| `place-file --src --case --kind=<受領資料\|LINEやりとり資料> --title` | SharePoint へファイル配置 |
+| `write-log --case --date --content` | 議事ログ Markdown を書き込み（固定名・上書き）|
+| `mark-done <doc_id>` | Firestore done + GCS 削除 |
+| `mark-review <doc_id> [--reason]` | Firestore needs_review、GCS 保持 |
+
+全サブコマンドに `--log-run-id=<外部ID>` オプションがあり、Cowork 側から共通 run_id を渡して同一仕分けセッションのログを束ねられる。
+
+### 実行例とサンプル出力
+
+```bash
+# 1) 未処理を取得
+$ python -m app.cli pull-pending --limit 50
+[{"doc_id":"abc123","type":"image","group_id":"Cxxx","timestamp":"2026-05-29T08:23:45+09:00","gcs_path":"gs://.../abc123.jpg"}]
+
+# 2) バイナリを DL（Cowork が Read tool で読む）
+$ python -m app.cli download abc123 --dest-dir "/mnt/c/.../pc_worker_tmp"
+{"doc_id":"abc123","local_path_unix":"/mnt/c/.../abc123.jpg","local_path_windows":"C:\\...\\abc123.jpg"}
+
+# 3) 案件候補
+$ python -m app.cli list-cases --days 90
+[{"case_name":"佐藤邸新築","last_updated":"2026-05-28T14:23:00+09:00","task_count":12}]
+
+# 4) Notion にタスク追加
+$ python -m app.cli write-task --case "佐藤邸新築" --title "【LINE】2026-05-29 概算見積" --note "確信度 0.92"
+{"page_id":"page-xxxxx","url":"https://www.notion.so/..."}
+
+# 5) SharePoint 格納 → 完了化 → GCS 削除
+$ python -m app.cli place-file --src "/mnt/c/.../abc123.pdf" --case "佐藤邸新築" --kind 受領資料 --title "概算見積"
+{"destination_unix":"/mnt/c/.../09.受領資料/2026-05-29 概算見積.pdf","destination_windows":"C:\\...","onedrive_link":null}
+$ python -m app.cli update-task --page-id page-xxxxx --priority 通常 --onedrive-link "C:\\..."
+$ python -m app.cli mark-done abc123
+{"doc_id":"abc123","status":"done","gcs_deleted":true}
+```
+
+### Cowork からの呼び出し例（bash 経由）
+
+Cowork Skill は同一セッションの全 pc_cli 呼び出しに共通 run_id を渡してログを束ねる:
+
+```bash
+RUN_ID="$(date +%Y%m%d-%H%M%S)-cowork"
+cd ~/projects/LineTaskCollection/pc_worker && source .venv/bin/activate
+
+# 未処理一覧を取得 → Cowork がマルチモーダル判定 → 各 item を順に処理
+python -m app.cli pull-pending --limit 50 --log-run-id "$RUN_ID"
+python -m app.cli download abc123 --log-run-id "$RUN_ID"        # Cowork が画像/PDF を Read
+python -m app.cli list-cases --log-run-id "$RUN_ID"             # 案件候補を取得して突合
+python -m app.cli write-task --case "佐藤邸新築" --title "..." --log-run-id "$RUN_ID"
+python -m app.cli place-file --src "..." --case "佐藤邸新築" --kind 受領資料 --title "..." --log-run-id "$RUN_ID"
+python -m app.cli mark-done abc123 --log-run-id "$RUN_ID"
+```
+
+確信度が低い／案件不明なものは Cowork がけいすけにその場で対話確認するか、`mark-review <doc_id> --reason ...` で needs_review に残す。
 
 ### テスト
 
@@ -276,25 +340,24 @@ python -m app.main
 pytest tests/ -v
 ```
 
-外部 API（GCS / Firestore / Notion / Anthropic）はすべてモック。
+外部 API（GCS / Firestore / Notion）はすべてモック。
 
 ### 実行環境（A 方針、2026-05-29 確定）
 
-pc_worker は **WSL2 のリポジトリ内で開発・実行**する（OneDrive 配下へのコピー配置はしない）。
+pc_cli は **WSL2 のリポジトリ内で開発・実行**する（OneDrive 配下へのコピー配置はしない）。
 
 - `.env` は WSL 側 `pc_worker/.env` のみ。けいすけが WSL 上で直接編集
-- 実行は WSL の venv から `python -m app.main`
 - SharePoint 書き込みは WSL から `/mnt/c/Users/knaka/OneDrive - 株式会社ビギン/...` 経由で OneDrive 同期に委ねる（`SHAREPOINT_ROOT` を `/mnt/c/...` 形式で指定）
 - Cowork はコード本体・`.env`・実行コンソールに直接アクセスできないため、`.env.example` の受け渡しフォルダ共有と、下記のログ複製で監査経路を代替する
 
 ---
 
-## Phase C: 実行ログの OneDrive 複製設定
+## Phase C': 実行ログの OneDrive 複製設定
 
-`python -m app.main` の実行結果（仕分け結果・確信度・エラー）を Cowork が OneDrive 経由で監査できるよう、ログを OneDrive 配下にも複製出力する。
+各 pc_cli 実行のログ（どの item をどう処理したか・エラー）を Cowork が OneDrive 経由で監査できるよう、stderr ログを OneDrive 配下にも複製出力する。
 
-- `.env` の `LOG_OUTPUT_DIR` に出力先を指定すると、`$LOG_OUTPUT_DIR/YYYY-MM-DD/<run_id>.jsonl` に JSON Lines 形式で複製される（コンソール出力は維持、ファイルは追加）
-- `<run_id>` は `run_once` 開始時に発行する `YYYYMMDD-HHMMSS-<6桁>` 形式
+- `.env` の `LOG_OUTPUT_DIR` に出力先を指定すると、`$LOG_OUTPUT_DIR/YYYY-MM-DD/<run_id>.jsonl` に JSON Lines 形式で複製される（コンソール=stderr 出力は維持、ファイルは追加）
+- `<run_id>` はサブコマンド呼び出しごとに発行（`YYYYMMDD-HHMMSS-<6桁>`）。`--log-run-id` で Cowork 側から共通 ID を渡せる
 - 日付フォルダはランタイムで自動作成
 
 ### LOG_OUTPUT_DIR の値の決め方

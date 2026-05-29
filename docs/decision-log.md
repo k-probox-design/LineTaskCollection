@@ -79,3 +79,47 @@ pc_worker の実行環境を **WSL2 リポジトリ内に一本化**（A 方針�
   2. `config.add_file_handler(run_id)` で実行ログを `$LOG_OUTPUT_DIR/YYYY-MM-DD/<run_id>.jsonl`（OneDrive 配下）に JSON Lines で複製出力。`LOG_OUTPUT_DIR` 未設定・書込不可時は WARN を出してコンソールのみで継続（ログ複製のために本処理を止めない）
 
 これにより CLAUDE.md §永続決定事項 Phase C 実装方針の項目 17/18（Cowork 許可フォルダへコピー配置）は本決定で上書きされる。
+
+## 2026-05-29 — Phase C を Cowork 主導仕分けに転換（Phase C'）
+
+Phase C 実地確認の手前で、仕分け判断を **Cowork（Opus）が担う構成**に転換。pc_worker（判定ロジック内蔵）を、判定を持たない薄い CLI ラッパー **pc_cli** に再構築した。
+
+### 転換理由（5 つ）
+
+1. **コスト**: API 案 月 ¥1,000〜3,000 → Cowork 案 ¥0（Claude Max 20x サブスク内で完結、`ANTHROPIC_API_KEY` 不要）
+2. **精度**: claude-sonnet-4-6（API）→ claude-opus-4-7（Cowork）の上位モデル
+3. **運用品質**: 確信度低のものをけいすけにその場で対話確認できる（API 案の needs_review は溜まる一方）
+4. **Phase D 連続性**: アーカイブ検索ヘルパーも Cowork なので仕分け・記録・検索が同一プロセスで完結
+5. **鍵管理の簡素化**: `ANTHROPIC_API_KEY` が不要に
+
+### Cowork 案 vs API 案
+
+| 観点 | API 案（Phase C） | Cowork 案（Phase C'）|
+|------|------------------|---------------------|
+| コスト | 月 ¥1,000〜3,000 | ¥0（サブスク内）|
+| 判定モデル | claude-sonnet-4-6 | claude-opus-4-7 |
+| 即時性 | バッチ 1 回実行 | スケジュール 4 回/日（朝昼夕夜）。数時間以内反映で十分 |
+| 確信度低の扱い | needs_review に溜まる | その場でけいすけに対話確認 |
+| 運用負担 | スクリプト保守 | Cowork Skill + pc_cli |
+
+投稿想定（けいすけヒアリング 2026-05-29）: ファイル 1 日 50 件未満 / テキスト多め（タスク化要あり）/ 即時性は数時間以内で十分。
+
+### 旧実装の流用・廃止判定
+
+| ファイル | 判定 |
+|---|---|
+| config.py | 流用（判定系変数 ANTHROPIC_API_KEY/CLASSIFY_*/LOG_AGGREGATION_HOURS/CANDIDATE_LOOKBACK_DAYS 削除、TMP_DOWNLOAD_DIR 追加、ログを stderr 化）|
+| pull.py | 流用 → CLI 化（list_pending / download / mark_done / mark_review）|
+| notion_writer.py | 流用 → CLI 化（list_cases / write_task / update_task、3 req/sec スロットル維持）|
+| sharepoint_writer.py | 流用 → CLI 化（place-file、overwrite 追加、パストラバーサル対策維持）|
+| log_writer.py | 流用（build_session_log は参照用に残置、write-log は Cowork 提供 content を書く）|
+| classify.py | **削除**（Cowork が直接マルチモーダル判定）|
+| orchestrator.py | **削除**（Cowork が pc_cli を順序立てて呼ぶ）|
+| main.py | **削除** → cli.py に置換 |
+| cli.py / winpath.py | **新規**（Typer 9 サブコマンド / unix↔windows パス変換）|
+
+旧 classify のシステムプロンプト・orchestrator の確信度分岐フローは `docs/cowork-skill-reference.md` に退避（Cowork Skill 移植用）。
+
+### pc_cli の出力契約
+
+stdout=結果 JSON のみ、ログ=stderr（+ LOG_OUTPUT_DIR ファイル）。Cowork が stdout の JSON だけをパースできるよう、Phase B/C ではコンソールログを stdout に出していたのを **stderr に変更**。

@@ -311,7 +311,7 @@ spec §7 を踏襲。各 Phase の完了基準は着手時に Cowork と確定�
 |-------|------|------|
 | Phase A | LINE 公式アカウント作成 + 受信疎通(ngrok 等で `[JOIN]`/ファイル受信を確認) | **完走(2026-05-28)** |
 | Phase B | Cloud Run 受信サーバー(GCS + Firestore 書き込み)を常時起動に | **完走(2026-05-28)** |
-| Phase C | PC 側処理(Cowork 実行)— pull → Claude 仕分け → SharePoint 格納 → Notion 記録 | **着手中(2026-05-28 kickoff)** |
+| Phase C | PC 側処理(Cowork 実行)— pull → Claude 仕分け → SharePoint 格納 → Notion 記録 | **Phase C' に転換、再構築中(2026-05-29)** |
 | Phase D | Cowork 用アーカイブ検索ヘルパー(Skill)を整備 | 未着手 |
 
 ---
@@ -442,7 +442,9 @@ Cowork 判断で確定した「以後の実装で従うルール」をここに�
 - 理由: LINE Webhook の取りこぼし防止。月額 ¥1,000〜2,000 程度の上振れは業務影響と引き換えに許容
 - 月額が想定を超えた場合の見直しトリガー: GCP Budget Alert を別途設定(けいすけ手作業、未実施)
 
-### Phase C 実装方針(2026-05-28 確定)
+### Phase C 実装方針(2026-05-28 確定 — ★ 2026-05-29 に Phase C' へ転換、下記方針で上書き)
+
+> 以下 18 項目は API 案前提。仕分けを Cowork 主導に転換したため取り消し線扱い。データ設計(Notion DB/プロパティ、SharePoint パス、Firestore 遷移)は Phase C' でも踏襲する。
 
 #### Notion 連携
 
@@ -487,6 +489,15 @@ Cowork 判断で確定した「以後の実装で従うルール」をここに�
 - Cowork はコード・`.env`・実行コンソールに直接アクセスできないため、監査経路を 2 点で代替:
   1. `pc_worker/.env.example` を `Coworkとの受け渡し/` に複製(実値は共有しない)
   2. 実行ログを `$LOG_OUTPUT_DIR/YYYY-MM-DD/<run_id>.jsonl`(OneDrive 配下)に JSON Lines 複製。未設定・書込不可時は WARN でスキップし本処理は継続
+
+### Phase C' 実装方針(2026-05-29 確定 — 仕分けを Cowork 主導に転換)
+
+- **仕分け判断は Cowork(Opus, claude-opus-4-7)が担う**。pc_worker は判定ロジックを持たない薄い CLI **pc_cli** に再構築
+- 転換理由: コスト(API 月 ¥1,000〜3,000 → ¥0)/ 精度(sonnet-4-6 → opus-4-7)/ 確信度低をその場で対話確認 / Phase D 連続性 / `ANTHROPIC_API_KEY` 不要
+- **pc_cli**(`python -m app.cli <subcommand>`): pull-pending / download / list-cases / write-task / update-task / place-file / write-log / mark-done / mark-review の 9 サブコマンド。stdout=結果 JSON、stderr=ログ
+- **削除**: classify.py / orchestrator.py / main.py(判定ロジックは `docs/cowork-skill-reference.md` に退避し Cowork Skill へ移植)
+- 起動運用: スケジュールタスク 4 回/日(朝 9・昼 13・夕 18・夜 21)で Cowork 自動起動(Cowork 側で設定、pc_cli は関与しない)
+- データ設計(Notion DB「設計タスク管理」/「仕分け待ち」優先度 / SharePoint `09.受領資料`・`09.LINEやりとり資料` / Firestore status 遷移)は Phase C の確定事項を踏襲
 
 > 新しい決定をしたら、その都度ここを更新する。
 
