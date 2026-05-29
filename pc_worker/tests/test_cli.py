@@ -79,36 +79,75 @@ def test_update_task_marks_done_by_priority():
     m.assert_called_once_with("p", None, None, "通常", None, None)
 
 
-def test_place_file_invalid_kind_fails():
-    result = runner.invoke(app, ["place-file", "--src", "/tmp/x.pdf", "--case", "A", "--kind", "謎", "--title", "t"])
+def test_list_case_folders_outputs_array():
+    sample = [{"folder_name": "テラチャージ", "depth": 1, "parent_folder_name": None}]
+    with patch("app.cli.folders.list_case_folders", return_value=sample) as m:
+        result = runner.invoke(app, ["list-case-folders", "--max-depth", "3"])
+    assert result.exit_code == 0
+    assert _stdout_json(result) == sample
+    m.assert_called_once_with(None, 3)
+
+
+def test_list_case_folders_root_not_found():
+    with patch("app.cli.folders.list_case_folders", side_effect=FileNotFoundError("no root")):
+        result = runner.invoke(app, ["list-case-folders", "--root", "/nope"])
     assert result.exit_code != 0
-    assert _stderr_json(result)["error"] == "invalid kind"
+    assert _stderr_json(result)["error"] == "root_not_found"
 
 
 def test_place_file_success(tmp_path):
     src = tmp_path / "x.pdf"
     src.write_bytes(b"%PDF")
-    dest = Path("/mnt/c/案件/佐藤邸/09.受領資料/2026-05-29 見積.pdf")
-    with patch("app.cli.sharepoint_writer.write_to_case_folder", return_value=dest), \
+    dest = Path("/mnt/c/案件/佐藤邸/09.LINEやりとり資料/2026-05-29 見積.pdf")
+    with patch("app.cli.sharepoint_writer.place_in_case_folder", return_value=(dest, True)), \
          patch("app.cli.sharepoint_writer.to_onedrive_link", return_value=None):
         result = runner.invoke(app, [
-            "place-file", "--src", str(src), "--case", "佐藤邸", "--kind", "受領資料", "--title", "見積",
+            "place-file", "--src", str(src), "--case-folder", "/mnt/c/案件/佐藤邸", "--title", "見積",
         ])
     assert result.exit_code == 0
     data = _stdout_json(result)
     assert data["destination_unix"] == str(dest)
     assert data["destination_windows"].startswith("C:\\")
     assert data["onedrive_link"] is None
+    assert data["created_subfolder"] is True
+
+
+def test_place_file_case_folder_not_found(tmp_path):
+    src = tmp_path / "x.pdf"
+    src.write_bytes(b"%PDF")
+    with patch("app.cli.sharepoint_writer.place_in_case_folder", side_effect=FileNotFoundError("nope")):
+        result = runner.invoke(app, [
+            "place-file", "--src", str(src), "--case-folder", "/mnt/c/案件/無い", "--title", "見積",
+        ])
+    assert result.exit_code != 0
+    assert _stderr_json(result)["error"] == "case_folder_not_found"
 
 
 def test_write_log_overwrites_fixed_name():
     dest = Path("/mnt/c/案件/A/09.LINEやりとり資料/2026-05-29 議事ログ.md")
-    with patch("app.cli.sharepoint_writer.write_to_case_folder", return_value=dest) as m:
-        result = runner.invoke(app, ["write-log", "--case", "A", "--date", "2026-05-29", "--content", "# log"])
+    with patch("app.cli.sharepoint_writer.place_in_case_folder", return_value=(dest, False)) as m:
+        result = runner.invoke(app, [
+            "write-log", "--case-folder", "/mnt/c/案件/A", "--date", "2026-05-29", "--content", "# log",
+        ])
     assert result.exit_code == 0
+    data = _stdout_json(result)
+    assert data["created_subfolder"] is False
     # overwrite=True で固定名書き込み
     assert m.call_args.kwargs.get("overwrite") is True
-    assert "議事ログ.md" in m.call_args.args[2]
+    assert "議事ログ.md" in m.call_args.args[1]
+
+
+def test_write_log_reads_content_from_stdin():
+    dest = Path("/mnt/c/案件/A/09.LINEやりとり資料/2026-05-29 議事ログ.md")
+    with patch("app.cli.sharepoint_writer.place_in_case_folder", return_value=(dest, False)) as m:
+        result = runner.invoke(
+            app,
+            ["write-log", "--case-folder", "/mnt/c/案件/A", "--date", "2026-05-29", "--content", "-"],
+            input="# stdin から渡したログ\n本文",
+        )
+    assert result.exit_code == 0
+    # place_in_case_folder の content 引数(args[2]) が stdin の内容
+    assert "stdin から渡したログ" in m.call_args.args[2]
 
 
 def test_mark_done():
