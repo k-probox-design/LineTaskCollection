@@ -2,28 +2,22 @@ import logging
 import re
 from pathlib import Path
 
-from app.config import settings
-
 logger = logging.getLogger("sharepoint_writer")
+
+# LINE 由来資料（画像/PDF/議事ログ）の統一格納先サブフォルダ
+LINE_SUBFOLDER = "09.LINEやりとり資料"
 
 # Windows のパス長上限(260)を考慮した、ファイル名(拡張子除く)の安全な最大長
 _MAX_STEM_LEN = 120
 
-# パス区切り・Windows 禁止文字・制御文字。案件名/タイトルは Claude 由来の信頼できない値なので
-# パス要素に使う前に必ず除去し、ディレクトリトラバーサルを防ぐ。
+# パス区切り・Windows 禁止文字・制御文字。タイトルは Cowork 由来の信頼できない値なので
+# ファイル名に使う前に必ず除去し、ディレクトリトラバーサルを防ぐ。
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
-def _sanitize_component(name: str) -> str:
-    cleaned = _INVALID_CHARS.sub("_", name).strip().strip(".")
-    return cleaned or "_"
-
-
 def _sanitize_filename(filename: str) -> str:
-    suffix = Path(filename).suffix
-    stem = Path(filename).stem
-    stem = _INVALID_CHARS.sub("_", stem).strip().strip(".") or "_"
-    suffix = _INVALID_CHARS.sub("", suffix)
+    suffix = _INVALID_CHARS.sub("", Path(filename).suffix)
+    stem = _INVALID_CHARS.sub("_", Path(filename).stem).strip().strip(".") or "_"
     if len(stem) > _MAX_STEM_LEN:
         stem = stem[:_MAX_STEM_LEN]
     return f"{stem}{suffix}"
@@ -42,36 +36,40 @@ def _dedupe_path(path: Path) -> Path:
         n += 1
 
 
-def write_to_case_folder(
-    case_name: str,
-    subfolder: str,
+def place_in_case_folder(
+    case_folder: str,
     filename: str,
     content: bytes | str,
     overwrite: bool = False,
-) -> Path:
-    if not settings.sharepoint_root:
-        raise ValueError("SHAREPOINT_ROOT が未設定です（.env を確認）")
+) -> tuple[Path, bool]:
+    """案件フォルダ(絶対パス)配下の 09.LINEやりとり資料/ にファイルを書き込む。
 
-    case_name = _sanitize_component(case_name)
-    subfolder = _sanitize_component(subfolder)
-    filename = _sanitize_filename(filename)
+    戻り値は (書き込んだパス, 09.LINEやりとり資料 を新規作成したか)。
+    案件フォルダが存在しない場合は FileNotFoundError（CLI 側で case_folder_not_found に変換）。
+    案件フォルダ自体の自動作成はしない（マッチしなければ needs_review 運用）。
+    """
+    base = Path(case_folder)
+    if not base.is_dir():
+        raise FileNotFoundError(f"case folder not found: {case_folder}")
 
-    root = Path(settings.sharepoint_root).resolve()
-    dest_dir = (root / case_name / subfolder).resolve()
-    if not dest_dir.is_relative_to(root):
-        raise ValueError(f"格納先が SHAREPOINT_ROOT の外を指しています: {dest_dir}")
+    subdir = base / LINE_SUBFOLDER
+    created_subfolder = not subdir.exists()
+    subdir.mkdir(parents=True, exist_ok=True)
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    # 議事ログのように固定名で上書きしたいときは overwrite=True、個別資料は連番化
-    dest = dest_dir / filename if overwrite else _dedupe_path(dest_dir / filename)
+    safe_name = _sanitize_filename(filename)
+    candidate = subdir / safe_name
+    # サニタイズ済みだが念のためトラバーサル封じ込め
+    if not candidate.resolve().is_relative_to(base.resolve()):
+        raise ValueError(f"格納先が案件フォルダの外を指しています: {candidate}")
 
+    dest = candidate if overwrite else _dedupe_path(candidate)
     if isinstance(content, bytes):
         dest.write_bytes(content)
     else:
         dest.write_text(content, encoding="utf-8")
 
-    logger.info("[SHAREPOINT] wrote %s", dest)
-    return dest
+    logger.info("[SHAREPOINT] wrote %s (created_subfolder=%s)", dest, created_subfolder)
+    return dest, created_subfolder
 
 
 def to_onedrive_link(path: Path) -> str | None:
