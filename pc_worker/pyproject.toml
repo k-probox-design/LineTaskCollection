@@ -7,7 +7,7 @@ name = "linetask-pc-worker"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.40",
+    "typer>=0.12",
     "notion-client>=2.2",
     "google-cloud-storage>=2.18",
     "google-cloud-firestore>=2.20",

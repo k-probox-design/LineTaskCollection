@@ -41,20 +41,8 @@ class _Settings:
         return os.environ.get("SHAREPOINT_ROOT", "")
 
     @property
-    def classify_confidence_threshold(self) -> float:
-        return float(os.environ.get("CLASSIFY_CONFIDENCE_THRESHOLD", "0.8"))
-
-    @property
-    def log_aggregation_hours(self) -> int:
-        return int(os.environ.get("LOG_AGGREGATION_HOURS", "24"))
-
-    @property
-    def candidate_lookback_days(self) -> int:
-        return int(os.environ.get("CANDIDATE_LOOKBACK_DAYS", "90"))
-
-    @property
-    def classify_model(self) -> str:
-        return os.environ.get("CLASSIFY_MODEL", "claude-sonnet-4-6")
+    def tmp_download_dir(self) -> str:
+        return os.environ.get("TMP_DOWNLOAD_DIR", "")
 
     @property
     def log_output_dir(self) -> str:
@@ -79,7 +67,8 @@ def setup_logging(level: int = logging.INFO) -> None:
     global _configured
     if _configured:
         return
-    handler = logging.StreamHandler(sys.stdout)
+    # CLI の結果 JSON は stdout、ログは stderr に分離する（pc_cli の出力契約）
+    handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(_json_formatter())
     root = logging.getLogger()
     root.handlers.clear()
