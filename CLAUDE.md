@@ -497,7 +497,8 @@ Cowork 判断で確定した「以後の実装で従うルール」をここに�
 - **pc_cli**(`python -m app.cli <subcommand>`): pull-pending / download / list-cases / write-task / update-task / place-file / write-log / mark-done / mark-review の 9 サブコマンド。stdout=結果 JSON、stderr=ログ
 - **削除**: classify.py / orchestrator.py / main.py(判定ロジックは `docs/cowork-skill-reference.md` に退避し Cowork Skill へ移植)
 - 起動運用: スケジュールタスク 4 回/日(朝 9・昼 13・夕 18・夜 21)で Cowork 自動起動(Cowork 側で設定、pc_cli は関与しない)
-- データ設計(Notion DB「設計タスク管理」/「仕分け待ち」優先度 / SharePoint `09.受領資料`・`09.LINEやりとり資料` / Firestore status 遷移)は Phase C の確定事項を踏襲
+- データ設計(Notion DB「設計タスク管理」/「仕分け待ち」優先度 / Firestore status 遷移)は Phase C の確定事項を踏襲
+- **SHAREPOINT_ROOT 配下は階層・命名が不規則**(ステータスフォルダ配下案件 / 直接案件 / 非案件 / 2〜3 階層混在)。固定パスを組み立てず、`list-case-folders` で候補を再帰スキャン → Cowork が案件名と突合 → 得た**絶対パス**を `place-file --case-folder` / `write-log --case-folder` に渡す。LINE 由来資料は `<案件フォルダ>/09.LINEやりとり資料/` に統一格納(サブフォルダ自動作成 OK、案件フォルダ自体の自動作成は NG=needs_review 運用)
 
 > 新しい決定をしたら、その都度ここを更新する。
 

@@ -272,21 +272,24 @@ python -m app.cli <subcommand> [options]
 
 stdout は結果 JSON のみ、ログは stderr（+ `LOG_OUTPUT_DIR` ファイル）に出る。エラー時は exit code != 0 で stderr に `{"error": "...", "detail": "..."}`。
 
-### サブコマンド一覧（9 個）
+### サブコマンド一覧（10 個）
 
 | サブコマンド | 役割 |
 |------------|------|
 | `pull-pending [--limit=50]` | Firestore status=pending をメタのみ JSON 配列で出力（GCS は触らない）|
 | `download <doc_id> [--dest-dir]` | GCS バイナリを DL、unix/windows 両形式のパスを返す |
 | `list-cases [--days=90]` | Notion から直近 N 日更新の案件名候補を出力 |
+| `list-case-folders [--root] [--max-depth=3]` | SHAREPOINT_ROOT 配下を再帰スキャンして案件フォルダ候補を出力 |
 | `write-task --case --title [--priority=仕分け待ち] [--note] [--onedrive-link]` | Notion 新規 row |
 | `update-task --page-id [--case --title --priority --note --onedrive-link]` | Notion 部分更新（優先度変更で仕分け完了扱い）|
-| `place-file --src --case --kind=<受領資料\|LINEやりとり資料> --title` | SharePoint へファイル配置 |
-| `write-log --case --date --content` | 議事ログ Markdown を書き込み（固定名・上書き）|
+| `place-file --src --case-folder --title [--date]` | 案件フォルダ(絶対パス)配下の 09.LINEやりとり資料/ にファイル配置 |
+| `write-log --case-folder --date --content` | 議事ログ Markdown を 09.LINEやりとり資料/ に書き込み（固定名・上書き、`--content -` で stdin）|
 | `mark-done <doc_id>` | Firestore done + GCS 削除 |
 | `mark-review <doc_id> [--reason]` | Firestore needs_review、GCS 保持 |
 
 全サブコマンドに `--log-run-id=<外部ID>` オプションがあり、Cowork 側から共通 run_id を渡して同一仕分けセッションのログを束ねられる。
+
+LINE 由来資料（画像/PDF/議事ログ）は案件フォルダ配下の **`09.LINEやりとり資料/` に統一**して格納する（`09.受領資料` は使わない）。`09.LINEやりとり資料/` は存在しなければ pc_cli が自動作成（案件フォルダ自体の自動作成はしない）。
 
 ### 実行例とサンプル出力
 
@@ -299,21 +302,33 @@ $ python -m app.cli pull-pending --limit 50
 $ python -m app.cli download abc123 --dest-dir "/mnt/c/.../pc_worker_tmp"
 {"doc_id":"abc123","local_path_unix":"/mnt/c/.../abc123.jpg","local_path_windows":"C:\\...\\abc123.jpg"}
 
-# 3) 案件候補
-$ python -m app.cli list-cases --days 90
-[{"case_name":"佐藤邸新築","last_updated":"2026-05-28T14:23:00+09:00","task_count":12}]
+# 3) 案件フォルダ候補をスキャン → Cowork が案件名と fuzzy match
+$ python -m app.cli list-case-folders --max-depth 3
+[{"folder_name":"00.HESTA_..._様","parent_folder_name":"@@@決定案件","depth":2,"absolute_path_unix":"/mnt/c/.../@@@/@@@決定案件/00.HESTA_..._様","absolute_path_windows":"C:\\...","child_dir_count":18,"has_line_yaritori_folder":true,"last_modified":"2026-05-25T01:53:00+09:00"}]
 
 # 4) Notion にタスク追加
 $ python -m app.cli write-task --case "佐藤邸新築" --title "【LINE】2026-05-29 概算見積" --note "確信度 0.92"
 {"page_id":"page-xxxxx","url":"https://www.notion.so/..."}
 
-# 5) SharePoint 格納 → 完了化 → GCS 削除
-$ python -m app.cli place-file --src "/mnt/c/.../abc123.pdf" --case "佐藤邸新築" --kind 受領資料 --title "概算見積"
-{"destination_unix":"/mnt/c/.../09.受領資料/2026-05-29 概算見積.pdf","destination_windows":"C:\\...","onedrive_link":null}
+# 5) SharePoint 格納（案件フォルダ絶対パス指定）→ 完了化 → GCS 削除
+$ python -m app.cli place-file --src "/mnt/c/.../abc123.pdf" --case-folder "/mnt/c/.../@@@決定案件/00.HESTA_..._様" --title "概算見積"
+{"destination_unix":"/mnt/c/.../09.LINEやりとり資料/2026-05-29 概算見積.pdf","destination_windows":"C:\\...","onedrive_link":null,"created_subfolder":false}
 $ python -m app.cli update-task --page-id page-xxxxx --priority 通常 --onedrive-link "C:\\..."
 $ python -m app.cli mark-done abc123
 {"doc_id":"abc123","status":"done","gcs_deleted":true}
 ```
+
+### SharePoint フォルダ構造の探索
+
+`SHAREPOINT_ROOT`（`/mnt/c/Users/.../@@@`）配下は階層・命名が不規則（ステータスフォルダ配下の案件 / 直接案件 / 年フォルダ経由の 3 階層 / 非案件フォルダ混在）。固定パスを組み立てず、`list-case-folders` で候補を取得して Cowork が案件名と突合し、得た **絶対パス**を `place-file --case-folder` / `write-log --case-folder` に渡す。
+
+出力の読み方:
+- `depth` / `parent_folder_name`: ステータスフォルダ配下か直接案件かの判別
+- `child_dir_count`: 多ければ集合フォルダ（年フォルダやステータスフォルダ）の可能性。少なければ単一案件
+- `has_line_yaritori_folder`: 既に `09.LINEやりとり資料/` があるか（初回かどうか）
+- `last_modified`: 最近触られた = アクティブ案件のヒント
+
+マッチする案件フォルダが無ければ Cowork は `mark-review <doc_id> --reason ...` で needs_review に振り分け、けいすけが手動でフォルダ作成 → 再仕分けする。
 
 ### Cowork からの呼び出し例（bash 経由）
 
@@ -325,10 +340,11 @@ cd ~/projects/LineTaskCollection/pc_worker && source .venv/bin/activate
 
 # 未処理一覧を取得 → Cowork がマルチモーダル判定 → 各 item を順に処理
 python -m app.cli pull-pending --limit 50 --log-run-id "$RUN_ID"
-python -m app.cli download abc123 --log-run-id "$RUN_ID"        # Cowork が画像/PDF を Read
-python -m app.cli list-cases --log-run-id "$RUN_ID"             # 案件候補を取得して突合
+python -m app.cli download abc123 --log-run-id "$RUN_ID"          # Cowork が画像/PDF を Read
+python -m app.cli list-cases --log-run-id "$RUN_ID"               # Notion 案件候補
+python -m app.cli list-case-folders --log-run-id "$RUN_ID"        # SharePoint 案件フォルダ候補 → 絶対パスを得る
 python -m app.cli write-task --case "佐藤邸新築" --title "..." --log-run-id "$RUN_ID"
-python -m app.cli place-file --src "..." --case "佐藤邸新築" --kind 受領資料 --title "..." --log-run-id "$RUN_ID"
+python -m app.cli place-file --src "..." --case-folder "/mnt/c/.../@@@決定案件/00.HESTA_..._様" --title "概算見積" --log-run-id "$RUN_ID"
 python -m app.cli mark-done abc123 --log-run-id "$RUN_ID"
 ```
 

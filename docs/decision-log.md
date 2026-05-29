@@ -123,3 +123,26 @@ Phase C 実地確認の手前で、仕分け判断を **Cowork（Opus）が担�
 ### pc_cli の出力契約
 
 stdout=結果 JSON のみ、ログ=stderr（+ LOG_OUTPUT_DIR ファイル）。Cowork が stdout の JSON だけをパースできるよう、Phase B/C ではコンソールログを stdout に出していたのを **stderr に変更**。
+
+## 2026-05-29 — SHAREPOINT_ROOT 配下構造ヒアリングを受けて、固定パス前提から絶対パス指定 + 再帰探索に変更
+
+Phase C' kickoff は `<SHAREPOINT_ROOT>/<案件名>/09.受領資料/` の固定パスを前提にしていたが、けいすけの実 SharePoint 構造（`SHAREPOINT_ROOT=/mnt/c/Users/knaka/OneDrive - 株式会社ビギン/@@@`）を Cowork が確認した結果、固定パスが成立しないと判明:
+
+- ステータスフォルダ（`@@@決定案件` 等）配下の案件 / 直接案件 / 非案件フォルダが混在
+- 階層深さが案件ごとに 2〜3 階層と不規則（年フォルダ経由もあり）
+- 案件内の番号付きサブフォルダ命名が不統一（同じ `09.` でも意味が違う）
+
+### 変更内容
+
+- **`list-case-folders` 新設**: SHAREPOINT_ROOT 配下を `iterdir()` 再帰（`--max-depth` 既定 3）でスキャンし、案件フォルダ候補のメタ（folder_name / parent / depth / 絶対パス unix+windows / child_dir_count / has_line_yaritori_folder / last_modified）を返す。Cowork が案件名と fuzzy match する材料
+- **`place-file` / `write-log` を `--case-folder <絶対パス>` 指定に変更**（`--case`/`--kind` 廃止）。Cowork が list-case-folders で得た絶対パスを直接渡す
+
+### けいすけ確定の運用ルール（5 点）
+
+1. **仕分け対象範囲**: SHAREPOINT_ROOT 直下フォルダ全部（ステータスフォルダ配下も）。除外リストは設けず Cowork の judgement に任せる（マッチしなければ needs_review）
+2. **LINE 由来資料の統一格納**: 画像/PDF/議事ログ すべて `<案件フォルダ>/09.LINEやりとり資料/` に統一（`09.受領資料` は使わない）
+3. **`09.XXX` 並列許容**: 同じ案件フォルダ内に `09.受領資料` と `09.LINEやりとり資料` が並んでも OK
+4. **サブフォルダ自動作成 OK**: `09.LINEやりとり資料/` が無ければ pc_cli が新規作成（`created_subfolder` フラグで通知）
+5. **案件フォルダ自体の自動作成 NG**: マッチする案件フォルダがなければ needs_review。けいすけが手動でフォルダ作成 → 再仕分け
+
+パストラバーサル対策（タイトルのサニタイズ + 案件フォルダ配下への封じ込め）は維持。`--case-folder` が存在しない場合は exit!=0 + `{"error":"case_folder_not_found"}`。

@@ -97,6 +97,31 @@ run_once():
 - 旧実装では threshold=0.8 を `.env` の `CLASSIFY_CONFIDENCE_THRESHOLD` で持っていた
 - Phase C' では Cowork（Opus）が判断時に確信度を内部で持ち、低いものはけいすけにその場で対話確認する（needs_review に溜めない）
 
+## 5. Cowork Skill 側のフロー（pc_cli 呼び出し、2026-05-29 SharePoint 探索対応版）
+
+SharePoint は階層・命名が不規則なので、案件フォルダは `list-case-folders` で探索して絶対パスを得る。
+
+```
+1. pull-pending                      # 未処理一覧
+2. for each item:
+     download <doc_id>               # 画像/PDF を取得 → Cowork が Read で中身を見る
+     list-cases                      # Notion 案件候補（タスク名ベース）
+     list-case-folders               # SharePoint 案件フォルダ候補（絶対パス付き）
+     ── Cowork が案件名 fuzzy match して案件フォルダの絶対パスを決定 ──
+     ├ マッチあり・確信あり:
+     │   write-task --case <案件名> --title ...        # Notion「仕分け待ち」row
+     │   place-file --src <local> --case-folder <絶対パス> --title ...   # 09.LINEやりとり資料/ へ
+     │   write-log  --case-folder <絶対パス> --date ... --content -      # 議事ログ（stdin）
+     │   update-task --page-id ... --priority 通常 --onedrive-link ...   # 仕分け完了化
+     │   mark-done <doc_id>
+     └ マッチなし・確信なし:
+         けいすけにその場で対話確認 → 案件フォルダ手動作成 → 再仕分け
+         または mark-review <doc_id> --reason ...      # needs_review に残す（GCS 保持）
+```
+
+- `list-case-folders` の `has_line_yaritori_folder` / `child_dir_count` / `last_modified` を案件判定のヒントに使う
+- 案件フォルダ自体の自動作成はしない（NG）。`09.LINEやりとり資料/` サブフォルダは place-file/write-log が自動作成する
+
 ### 議事ログ Markdown の構造（旧 log_writer.build_session_log）
 
 ```markdown
