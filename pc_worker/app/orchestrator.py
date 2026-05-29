@@ -1,7 +1,9 @@
 import logging
+import uuid
+from datetime import datetime
 from pathlib import Path
 
-from app import classify, log_writer, notion_writer, pull, sharepoint_writer
+from app import classify, config, log_writer, notion_writer, pull, sharepoint_writer
 from app.config import settings
 from app.pull import PendingItem
 
@@ -50,6 +52,10 @@ def _process_item(item: PendingItem, candidates: list[str], threshold: float) ->
 
 
 def run_once() -> None:
+    run_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    config.add_file_handler(run_id)
+    logger.info("[ORCH] run_once start run_id=%s", run_id)
+
     items = pull.pull_pending()
     candidates = notion_writer.fetch_case_candidates()
     threshold = settings.classify_confidence_threshold
@@ -62,4 +68,4 @@ def run_once() -> None:
         except Exception:
             logger.exception("[ORCH] failed to process message_id=%s", item.message_id)
 
-    logger.info("[ORCH] run_once finished: %d/%d items processed", processed, len(items))
+    logger.info("[ORCH] run_once finished: run_id=%s %d/%d items processed", run_id, processed, len(items))

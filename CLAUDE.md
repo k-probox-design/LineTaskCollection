@@ -477,8 +477,16 @@ Cowork 判断で確定した「以後の実装で従うルール」をここに�
 
 #### Cowork 許可フォルダ
 
-17. **`C:\Users\knaka\OneDrive - 株式会社ビギン\@@設計\51.LINE投稿ボット\pc_worker\`** に PC 側スクリプトと `.env` を配置
-18. リポジトリの `pc_worker/` 配下を上記パスにコピーして運用(OneDrive 同期遅延を避けるため)
+17. ~~**`C:\Users\knaka\OneDrive - 株式会社ビギン\@@設計\51.LINE投稿ボット\pc_worker\`** に PC 側スクリプトと `.env` を配置~~ → **2026-05-29 A 方針で上書き(下記)**
+18. ~~リポジトリの `pc_worker/` 配下を上記パスにコピーして運用~~ → **2026-05-29 A 方針で上書き(下記)**
+
+### Phase C 実行環境(2026-05-29 確定、A 方針 — 項目 17/18 を上書き)
+
+- pc_worker は **WSL2 リポジトリ内で開発・実行**(OneDrive へのコピー配置=B-2 案は不採用、二重管理の運用負債を避ける)
+- `.env` も WSL 側 `pc_worker/.env` のみ。SharePoint 書き込みは WSL から `/mnt/c/.../OneDrive/...` 経由で同期に委ねる
+- Cowork はコード・`.env`・実行コンソールに直接アクセスできないため、監査経路を 2 点で代替:
+  1. `pc_worker/.env.example` を `Coworkとの受け渡し/` に複製(実値は共有しない)
+  2. 実行ログを `$LOG_OUTPUT_DIR/YYYY-MM-DD/<run_id>.jsonl`(OneDrive 配下)に JSON Lines 複製。未設定・書込不可時は WARN でスキップし本処理は継続
 
 > 新しい決定をしたら、その都度ここを更新する。
 

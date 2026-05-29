@@ -278,9 +278,39 @@ pytest tests/ -v
 
 外部 API（GCS / Firestore / Notion / Anthropic）はすべてモック。
 
-### Cowork 許可フォルダへの配置
+### 実行環境（A 方針、2026-05-29 確定）
 
-リポジトリの `pc_worker/` 配下を `C:\Users\knaka\OneDrive - 株式会社ビギン\@@設計\51.LINE投稿ボット\pc_worker\` にコピーして運用する（鍵・スクリプトは Cowork 許可フォルダ内に置く）。
+pc_worker は **WSL2 のリポジトリ内で開発・実行**する（OneDrive 配下へのコピー配置はしない）。
+
+- `.env` は WSL 側 `pc_worker/.env` のみ。けいすけが WSL 上で直接編集
+- 実行は WSL の venv から `python -m app.main`
+- SharePoint 書き込みは WSL から `/mnt/c/Users/knaka/OneDrive - 株式会社ビギン/...` 経由で OneDrive 同期に委ねる（`SHAREPOINT_ROOT` を `/mnt/c/...` 形式で指定）
+- Cowork はコード本体・`.env`・実行コンソールに直接アクセスできないため、`.env.example` の受け渡しフォルダ共有と、下記のログ複製で監査経路を代替する
+
+---
+
+## Phase C: 実行ログの OneDrive 複製設定
+
+`python -m app.main` の実行結果（仕分け結果・確信度・エラー）を Cowork が OneDrive 経由で監査できるよう、ログを OneDrive 配下にも複製出力する。
+
+- `.env` の `LOG_OUTPUT_DIR` に出力先を指定すると、`$LOG_OUTPUT_DIR/YYYY-MM-DD/<run_id>.jsonl` に JSON Lines 形式で複製される（コンソール出力は維持、ファイルは追加）
+- `<run_id>` は `run_once` 開始時に発行する `YYYYMMDD-HHMMSS-<6桁>` 形式
+- 日付フォルダはランタイムで自動作成
+
+### LOG_OUTPUT_DIR の値の決め方
+
+Cowork が読める OneDrive 同期フォルダ内のパスを `/mnt/c/...` 形式で指定する。例:
+
+```
+LOG_OUTPUT_DIR=/mnt/c/Users/knaka/OneDrive - 株式会社ビギン/@@設計/51.LINE投稿ボット/pc_worker_logs
+```
+
+### フォールバック挙動
+
+ログ複製は「あれば便利」な監査補助であり、本処理を止めない設計:
+
+- `LOG_OUTPUT_DIR` 未設定 → ファイル出力ハンドラを登録せず、コンソールのみ。WARN を 1 行出して継続
+- パスが存在しない / 書き込めない → 同様にスキップして WARN、本処理は継続
 
 ---
 

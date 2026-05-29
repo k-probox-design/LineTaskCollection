@@ -67,3 +67,15 @@ classify はモデルの生出力（case_name と confidence）をそのまま�
 ### コンテンツダウンロードと Notion OneDrive リンク
 
 PC 側スクリプトは同期 SDK（google-cloud-storage / firestore / notion-client / anthropic 同期クライアント）で実装。Notion の OneDrive フィールドには SharePoint URL ではなくローカルパスの `file://` URL を入れる（kickoff §注意事項のとおり、OneDrive 同期に任せ SharePoint API での URL 取得は避ける方針）。けいすけが Notion から開いたとき同期済みなら参照できる。
+
+## 2026-05-29 — Phase C 実行環境を WSL 一本化（A 方針）、Cowork 監査はログ複製で代替
+
+pc_worker の実行環境を **WSL2 リポジトリ内に一本化**（A 方針）。OneDrive 配下へ一式コピーして Windows Python で動かす B-2 案は不採用。
+
+- 理由: WSL リポジトリと OneDrive コピーの二重管理が運用負債になる（更新の都度コピーを忘れるとバージョン乖離）
+- `.env` も WSL 側のみ。SharePoint 書き込みは WSL から `/mnt/c/.../OneDrive/...` 経由で同期に委ねる
+- A 方針では Cowork がコード・`.env`・実行コンソールに直接アクセスできないため、監査経路を 2 点で代替:
+  1. `pc_worker/.env.example` を受け渡しフォルダ（`Coworkとの受け渡し/`）に複製し、Cowork が必要項目を把握できるようにする（実値は共有しない）
+  2. `config.add_file_handler(run_id)` で実行ログを `$LOG_OUTPUT_DIR/YYYY-MM-DD/<run_id>.jsonl`（OneDrive 配下）に JSON Lines で複製出力。`LOG_OUTPUT_DIR` 未設定・書込不可時は WARN を出してコンソールのみで継続（ログ複製のために本処理を止めない）
+
+これにより CLAUDE.md §永続決定事項 Phase C 実装方針の項目 17/18（Cowork 許可フォルダへコピー配置）は本決定で上書きされる。
