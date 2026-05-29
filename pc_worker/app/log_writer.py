@@ -26,10 +26,12 @@ def _query_group_messages(group_id: str):
     )
 
 
-def build_session_log(group_id: str, around: datetime, window_hours: int | None = None) -> str:
-    """同 groupId 内で around 前後 window_hours 時間の text/file イベントを時系列でまとめた Markdown を返す。"""
-    if window_hours is None:
-        window_hours = settings.log_aggregation_hours
+def build_session_log(group_id: str, around: datetime, window_hours: int = 24) -> str:
+    """同 groupId 内で around 前後 window_hours 時間の text/file イベントを時系列でまとめた Markdown を返す。
+
+    Phase C' では Cowork が議事ログ Markdown を組み立て pc_cli write-log に渡すため、
+    本関数は CLI からは直接呼ばれない。Firestore からの集約が必要になったとき流用するために残置。
+    """
     start = around - timedelta(hours=window_hours)
     end = around + timedelta(hours=window_hours)
 

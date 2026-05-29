@@ -47,6 +47,7 @@ def write_to_case_folder(
     subfolder: str,
     filename: str,
     content: bytes | str,
+    overwrite: bool = False,
 ) -> Path:
     if not settings.sharepoint_root:
         raise ValueError("SHAREPOINT_ROOT が未設定です（.env を確認）")
@@ -61,7 +62,8 @@ def write_to_case_folder(
         raise ValueError(f"格納先が SHAREPOINT_ROOT の外を指しています: {dest_dir}")
 
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = _dedupe_path(dest_dir / filename)
+    # 議事ログのように固定名で上書きしたいときは overwrite=True、個別資料は連番化
+    dest = dest_dir / filename if overwrite else _dedupe_path(dest_dir / filename)
 
     if isinstance(content, bytes):
         dest.write_bytes(content)
@@ -70,3 +72,12 @@ def write_to_case_folder(
 
     logger.info("[SHAREPOINT] wrote %s", dest)
     return dest
+
+
+def to_onedrive_link(path: Path) -> str | None:
+    """SharePoint web 表示用 URL を返す（未実装スタブ。後続精緻化対象）。
+
+    OneDrive 同期に任せる方針のため、現状は web URL を生成せず None を返す。
+    Cowork は destination_windows をローカル参照に使う。
+    """
+    return None

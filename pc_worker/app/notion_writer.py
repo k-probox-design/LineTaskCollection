@@ -5,16 +5,24 @@ from datetime import datetime, timedelta, timezone
 
 from notion_client import Client
 
-from app.classify import ClassifyResult
 from app.config import settings
-from app.pull import PendingItem
 
 logger = logging.getLogger("notion_writer")
+
+# 設計タスク管理 DB の既存プロパティ名。けいすけの実地確認で実際の名称と照合し、
+# 相違があればここだけ直せば済むように定数化している。
+PROP_TITLE = "タスク名"
+PROP_PRIORITY = "優先度"
+PROP_NOTE = "備考"
+PROP_ONEDRIVE = "OneDrive"
+PRIORITY_PENDING = "仕分け待ち"
 
 # Notion API のレート制限(平均 3 req/sec)対策。連続呼び出しの間隔を最低 0.34 秒空ける。
 _MIN_INTERVAL = 0.34
 _last_call = 0.0
 _throttle_lock = threading.Lock()
+
+_client: Client | None = None
 
 
 def _throttle() -> None:
@@ -25,16 +33,6 @@ def _throttle() -> None:
             time.sleep(wait)
         _last_call = time.monotonic()
 
-# 設計タスク管理 DB の既存プロパティ名。けいすけの実地確認で実際の名称と照合し、
-# 相違があればここだけ直せば済むように定数化している。
-PROP_TITLE = "タスク名"
-PROP_PRIORITY = "優先度"
-PROP_NOTE = "備考"
-PROP_ONEDRIVE = "OneDrive"
-PRIORITY_PENDING = "仕分け待ち"
-
-_client: Client | None = None
-
 
 def _get_client() -> Client:
     global _client
@@ -43,57 +41,89 @@ def _get_client() -> Client:
     return _client
 
 
-def _build_note(item: PendingItem, result: ClassifyResult) -> str:
-    related = ", ".join(result.related_message_ids) if result.related_message_ids else "（なし）"
-    return (
-        "[Claude 推測]\n"
-        f"案件候補: {result.case_name or '（候補なし）'}\n"
-        f"確信度: {result.confidence:.2f}\n"
-        f"判断理由: {result.reasoning}\n"
-        f"関連メッセージ: {related}\n"
-        f"LINE messageId: {item.message_id}\n"
-        f"LINE groupId: {item.group_id}\n"
-        f"GCS path: {item.gcs_path or '（なし）'}\n"
-    )
+def _title_text(page: dict) -> str:
+    title_prop = page.get("properties", {}).get(PROP_TITLE, {}).get("title", [])
+    return "".join(part.get("plain_text", "") for part in title_prop).strip()
 
 
-def create_pending_task(item: PendingItem, result: ClassifyResult) -> str:
-    date_str = item.received_at.date().isoformat()
-    task_name = f"【LINE】{date_str} {result.title}"
-    properties = {
-        PROP_TITLE: {"title": [{"text": {"content": task_name}}]},
-        PROP_PRIORITY: {"select": {"name": PRIORITY_PENDING}},
-        PROP_NOTE: {"rich_text": [{"text": {"content": _build_note(item, result)}}]},
+def _compose_note(case: str | None, note: str | None) -> str:
+    text = note or ""
+    if case:
+        text = f"案件: {case}\n{text}".strip()
+    return text
+
+
+def write_task(
+    case: str,
+    title: str,
+    priority: str = PRIORITY_PENDING,
+    note: str | None = None,
+    onedrive_link: str | None = None,
+) -> dict:
+    """設計タスク管理 DB に row を新規作成。案件名は備考に記録する（案件プロパティは実 DB 未確認のため）。"""
+    properties: dict = {
+        PROP_TITLE: {"title": [{"text": {"content": title}}]},
+        PROP_PRIORITY: {"select": {"name": priority}},
     }
+    note_text = _compose_note(case, note)
+    if note_text:
+        properties[PROP_NOTE] = {"rich_text": [{"text": {"content": note_text}}]}
+    if onedrive_link:
+        properties[PROP_ONEDRIVE] = {"url": onedrive_link}
+
     _throttle()
     page = _get_client().pages.create(
         parent={"database_id": settings.notion_database_id_design_task},
         properties=properties,
     )
-    logger.info("[NOTION] created task %s (page=%s)", task_name, page["id"])
-    return page["id"]
+    logger.info("[NOTION] created task '%s' (page=%s)", title, page["id"])
+    return {"page_id": page["id"], "url": page.get("url", "")}
 
 
-def update_task_with_sharepoint_link(page_id: str, sharepoint_url: str) -> None:
+def update_task(
+    page_id: str,
+    case: str | None = None,
+    title: str | None = None,
+    priority: str | None = None,
+    note: str | None = None,
+    onedrive_link: str | None = None,
+) -> dict:
+    """既存 row を部分更新。指定したフィールドのみ更新する。"""
+    properties: dict = {}
+    updated: list[str] = []
+
+    if title is not None:
+        properties[PROP_TITLE] = {"title": [{"text": {"content": title}}]}
+        updated.append("title")
+    if priority is not None:
+        properties[PROP_PRIORITY] = {"select": {"name": priority}}
+        updated.append("priority")
+    if case is not None or note is not None:
+        properties[PROP_NOTE] = {"rich_text": [{"text": {"content": _compose_note(case, note)}}]}
+        if case is not None:
+            updated.append("case")
+        if note is not None:
+            updated.append("note")
+    if onedrive_link is not None:
+        properties[PROP_ONEDRIVE] = {"url": onedrive_link}
+        updated.append("onedrive_link")
+
     _throttle()
-    _get_client().pages.update(
-        page_id=page_id,
-        properties={PROP_ONEDRIVE: {"url": sharepoint_url}},
-    )
-    logger.info("[NOTION] updated page %s with SharePoint link", page_id)
+    _get_client().pages.update(page_id=page_id, properties=properties)
+    logger.info("[NOTION] updated page %s fields=%s", page_id, updated)
+    return {"page_id": page_id, "updated_fields": updated}
 
 
-def fetch_case_candidates() -> list[str]:
-    """設計タスク管理 DB から「仕分け待ち」以外・直近 N 日以内のタスク名を仕分け候補として取得。"""
-    since = (datetime.now(timezone.utc) - timedelta(days=settings.candidate_lookback_days)).isoformat()
-    query_filter = {
-        "and": [
-            {"property": PROP_PRIORITY, "select": {"does_not_equal": PRIORITY_PENDING}},
-            {"timestamp": "created_time", "created_time": {"on_or_after": since}},
-        ]
-    }
+def list_cases(days: int = 90) -> list[dict]:
+    """直近 N 日に更新があったタスクから案件名候補を集約して返す。
 
-    candidates: list[str] = []
+    案件名は現状タスク名（PROP_TITLE）を流用（実 DB の案件プロパティ名が未確認のため）。
+    同名タスクを 1 案件として件数・最終更新でまとめる。
+    """
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    query_filter = {"timestamp": "last_edited_time", "last_edited_time": {"on_or_after": since}}
+
+    agg: dict[str, dict] = {}
     cursor: str | None = None
     while True:
         kwargs = {
@@ -107,15 +137,20 @@ def fetch_case_candidates() -> list[str]:
         resp = _get_client().databases.query(**kwargs)
 
         for page in resp.get("results", []):
-            title_prop = page.get("properties", {}).get(PROP_TITLE, {}).get("title", [])
-            name = "".join(part.get("plain_text", "") for part in title_prop).strip()
-            if name:
-                candidates.append(name)
+            case_name = _title_text(page)
+            if not case_name:
+                continue
+            last_edited = page.get("last_edited_time", "")
+            entry = agg.setdefault(case_name, {"case_name": case_name, "last_updated": last_edited, "task_count": 0})
+            entry["task_count"] += 1
+            if last_edited > entry["last_updated"]:
+                entry["last_updated"] = last_edited
 
         if resp.get("has_more"):
             cursor = resp.get("next_cursor")
         else:
             break
 
-    logger.info("[NOTION] fetched %d case candidates", len(candidates))
-    return candidates
+    cases = sorted(agg.values(), key=lambda c: c["last_updated"], reverse=True)
+    logger.info("[NOTION] list_cases returned %d cases (days=%d)", len(cases), days)
+    return cases
