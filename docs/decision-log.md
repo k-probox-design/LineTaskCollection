@@ -201,3 +201,23 @@ Notion 修正の再スモークで、OneDrive 実行コピー `51.LINE投稿ボ�
 - `--dry-run` 時は mtime 更新・ピン留め・検証をスキップ。
 
 検証結果: `pc_cli\app\*.py` 全 10 ファイルが `pinned=True` / `offline=False`、サイズ正一致。`.env`（けいすけの実値）と `secrets/` は rsync 除外のまま保持（同期・削除・コミットなし）。けいすけの手動ピンは今後不要。
+
+## 2026-05-30 — ハイドレート恒久対策を「OneDrive ピン留め」から「git clone」に変更（A 案）
+
+再スモークで、`290d384` のピン留めは **Cowork の Linux マウントからは効いていない**ことが実測判明。Windows 側 Read は完全（`offline=False`/`pinned=True`/size 一致）だが、同一セッションの Cowork bash マウントは依然 `notion_writer.py` を 5395B で途中切れ・mtime も 5/29 に巻き戻ったまま返す。`attrib +P` は「evict しない」フラグであって実体ハイドレートを保証せず、新セッション再マウントでも解消しなかった。Windows PowerShell 検証は Cowork 可読性を保証しない。
+
+ロジック自体は再スモークで全 green（`list-cases` 199 案件 / `write-task` 本番 row 作成→archive 成功 / SA 鍵 / MOUNT_MAP・winpath）。残ブロッカーはハイドレート 1 点のみ。
+
+### 決定（候補 a/b/c から b を採用）
+
+- **(b) git clone を本番の正**: Cowork サンドボックスはコードを GitHub private repo から git clone してネイティブ fs `/outputs/linetask` で実行する。OneDrive プレースホルダ依存を断つ。`scripts/sandbox-bootstrap.sh`（clone→`.env` コピー→pip→**AST 検証**）を新設し、Skill は PAT 付き curl で取得して実行。
+- OneDrive からは「小サイズで完全に読める」`.env`（PAT/Notion 鍵等）と SA 鍵だけを読む。`GOOGLE_APPLICATION_CREDENTIALS` は Windows パスのまま、`mounts.py` の `/sessions/*/mnt` glob フォールバックで実マウントへ解決（`/outputs` から動かしても機能、テスト追加で担保）。
+- 検証方法の是正: Windows 側 size ではなく **「サンドボックスが実際に読むバイト列」で AST parse**（bootstrap と smoke 手順 0a）。
+- (a) 強制ハイドレート（`/mnt/c` 越し全 `.py` read→pin）は `sync-pc-cli-to-onedrive.sh` に**補助として残す**が、Cowork マウント追随は保証外。OneDrive コピーの役割は「WSL 開発／git 不達フォールバック／`.env.sandbox.example` 配布」に降格。
+- (c) FoD 外配置は Cowork が OneDrive 選択フォルダしかマウントできず不成立。
+
+### けいすけ手作業（増分）
+
+- GitHub fine-grained PAT（対象 repo = 当 repo のみ、Contents:Read のみ）を発行し、OneDrive `pc_cli/.env` の `GITHUB_PAT=` に記入。
+
+テストは 66 → 67 pass（`/outputs` 実行＝session 外での glob フォールバック解決を追加）。

@@ -49,6 +49,19 @@ def test_discover_maps_via_wsl_fallback(tmp_path, monkeypatch):
     assert maps == [(str(real), WIN_ATSIGN)]
 
 
+def test_discover_maps_via_glob_when_outside_sessions(tmp_path, monkeypatch):
+    # git clone を /outputs で実行する場合、self_path が /sessions 配下にないので session_base=None。
+    # その場合でも /sessions/*/mnt/<name> の glob フォールバックでマウントを解決できること（A案=B案の土台）。
+    real = tmp_path / "mnt-atsign"
+    real.mkdir()
+    monkeypatch.setattr(mounts, "_session_mount_base", lambda _self: None)
+    monkeypatch.setattr(mounts.winpath, "windows_to_unix", lambda p, m=None: p)  # WSL 分岐は不一致
+    monkeypatch.setattr(mounts.Path, "glob", lambda self, pat: iter([real]))
+
+    maps = mounts.discover_maps(WIN_ATSIGN, self_path="/outputs/linetask/pc_worker/app/mounts.py")
+    assert maps == [(str(real), WIN_ATSIGN)]
+
+
 def test_discover_maps_skips_unresolved(monkeypatch):
     # どこにも実在しない → 写像から除外（処理は止めない）
     monkeypatch.setattr(mounts, "_session_mount_base", lambda _self: None)

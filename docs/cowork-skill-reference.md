@@ -151,21 +151,33 @@ SharePoint は階層・命名が不規則なので、案件フォルダは `list
 
 Cowork サンドボックス（Ubuntu 22 / Python 3.10 / OneDrive 選択フォルダのみマウント / ネットワーク開）から pc_cli を完動させるための、Skill が依拠する確定仕様。
 
-### 6-1. ブートストラップ（揮発サンドボックス、起動毎）
+### 6-1. ブートストラップ（揮発サンドボックス、起動毎）— git clone を正とする
 
-サンドボックスは実行毎に揮発するため、Skill は毎回先頭でこれを実行する:
+**重要（2026-05-30 確定）**: コードを OneDrive コピーから読んではいけない。OneDrive Files-On-Demand のプレースホルダは Cowork の Linux マウント越しに**中身が途中で切れて読めない**（`notion_writer.py` が 5395B で頭打ち→AST 失敗）。`attrib +P`(Pinned) でも実体ハイドレートは保証されず、WSL 側のどの対策でも安定解消しなかった。よって **コードは GitHub から git clone** し、OneDrive からは「小サイズで完全に読める」`.env` と SA 鍵だけを使う。
+
+Skill は毎回先頭でこれを実行する（リポジトリの `scripts/sandbox-bootstrap.sh` が clone＋prep＋検証まで行う）:
 
 ```bash
-# pc_cli の実マウントを glob で特定（セッション名は動的なので固定しない）
-PC=$(ls -d /sessions/*/mnt/51.LINE投稿ボット/pc_cli 2>/dev/null | head -1)
-cd "$PC"
-pip install -r requirements.txt --break-system-packages -q
-export PYTHONPATH="$PC"
+ONEDRIVE=$(ls -d /sessions/*/mnt/51.LINE投稿ボット/pc_cli 2>/dev/null | head -1)
+export GITHUB_PAT=$(grep -E '^GITHUB_PAT=' "$ONEDRIVE/.env" | head -1 | cut -d= -f2- | tr -d '\r')
+export REPO_REF=main          # main マージ前のテストは work ブランチ名を指定（例: work/2026-05-28-phaseC）
+
+# bootstrap スクリプトを PAT 付きで取得して実行（clone→.env コピー→pip→AST 検証）
+curl -fsSL -H "Authorization: token $GITHUB_PAT" \
+  "https://raw.githubusercontent.com/k-probox-design/LineTaskCollection/$REPO_REF/scripts/sandbox-bootstrap.sh" \
+  -o /tmp/sandbox-bootstrap.sh
+bash /tmp/sandbox-bootstrap.sh
+
+cd /outputs/linetask/pc_worker
+export PYTHONPATH="$PWD"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-cowork"
 ```
 
-- 依存は `requirements.txt`（バージョン固定、Python 3.10/3.12 双方で解決可）を毎回 pip。`google-cloud-*` のバイナリ wheel があるため vendoring はしない。所要は数十秒見込み（実測はスモークで確定）。
-- `.env` は `pc_cli/.env`（`.env.sandbox.example` をコピーしてけいすけが秘密値を記入済みの前提）。
+- ブランチ名にスラッシュがあり raw URL が解決しづらいテスト時は、`curl` の代わりに直接
+  `git clone --depth1 --branch <ref> https://oauth2:$GITHUB_PAT@github.com/k-probox-design/LineTaskCollection.git /outputs/linetask` してから `bash /outputs/linetask/scripts/sandbox-bootstrap.sh`（既に clone 済みなら bootstrap は再 clone する。テストでは `WORK_DIR` を変えるか、bootstrap を使わず手動 prep でもよい）。
+- 依存は `requirements.txt`（バージョン固定、Python 3.10/3.12 双方で解決可）を毎回 pip。`google-cloud-*` のバイナリ wheel があるため vendoring はしない。pip 実測 約6秒（2026-05-30 スモーク）。
+- `.env` は OneDrive `pc_cli/.env`（けいすけ記入済み）を clone 内へコピーして使う。SA 鍵は `.env` の `GOOGLE_APPLICATION_CREDENTIALS`（Windows パス）が実行時に MOUNT_MAP の glob で実マウントへ解決され、OneDrive `secrets/` から直接読まれる（小サイズで可読）。
+- pc_cli を `/outputs` から動かしても、`mounts.py` は session ベース検出に失敗した後 `/sessions/*/mnt/<名>` の glob でマウントを解決するため `@@@`/winpath 変換は機能する。
 
 ### 6-2. マウント解決と winpath 一般化（動的パスの吸収）
 
@@ -188,6 +200,7 @@ RUN_ID="$(date +%Y%m%d-%H%M%S)-cowork"
 
 | 変数 | 値の形 | 役割 |
 |------|--------|------|
+| `GITHUB_PAT` | 秘密値（けいすけ記入） | private repo Contents:Read の PAT。git clone でコード取得 |
 | `NOTION_API_KEY` | 秘密値（けいすけ記入） | Notion 認証 |
 | `NOTION_DATABASE_ID_DESIGN_TASK` | `1eb17f63-...`（記入済み） | 設計タスク管理 DB |
 | `GCS_BUCKET` / `FIRESTORE_PROJECT` | 記入済み | GCP リソース |
@@ -207,7 +220,8 @@ RUN_ID="$(date +%Y%m%d-%H%M%S)-cowork"
 
 | # | コマンド | 期待 |
 |---|---------|------|
-| 0 | `python -c "from app import mounts,config; print(config.settings.path_maps); print(config.settings.sharepoint_root)"` | 写像が `[(/sessions/<現>/mnt/@@@, C:\...\@@@), ...]`、sharepoint_root が `/sessions/<現>/mnt/@@@` |
+| 0a | `python -c "import ast,glob; [ast.parse(open(f,encoding='utf-8').read()) for f in glob.glob('app/*.py')]; print('AST OK', len(glob.glob('app/*.py')))"` | 全 `app/*.py` が完全に読めて構文 OK（**Windows 側 size ではなくサンドボックスが読むバイト列で確認**）。bootstrap が git clone していれば必ず通る |
+| 0b | `python -c "from app import mounts,config; print(config.settings.path_maps); print(config.settings.sharepoint_root)"` | 写像が `[(/sessions/<現>/mnt/@@@, C:\...\@@@), ...]`、sharepoint_root が `/sessions/<現>/mnt/@@@` |
 | 1 | `python -m app.cli pull-pending --limit 5 --log-run-id "$RUN_ID"` | stdout に pending メタの JSON 配列。Firestore 到達（SA 鍵）確認 |
 | 2 | `python -m app.cli download <doc_id> --log-run-id "$RUN_ID"` | `local_path_unix` が `/sessions/<現>/mnt/.../pc_worker_tmp/<doc_id>.<ext>`、`local_path_windows` が `C:\...` 形 |
 | 3 | `python -m app.cli list-cases --days 90 --log-run-id "$RUN_ID"` | Notion 案件候補の JSON 配列。Notion 到達確認 |

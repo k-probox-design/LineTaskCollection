@@ -370,17 +370,23 @@ pytest tests/ -v
 
 Cowork の bash は **Ubuntu 22 / Python 3.10 の揮発サンドボックス**。マウントは OneDrive の選択フォルダのみ（`/sessions/<動的セッション名>/mnt/<フォルダ名>/`、セッション名は実行毎に変わる）。ネットワークは開いている（Firestore / Notion / pypi 到達可）。この前提で pc_cli を完動させる。
 
-### ① 依存導入（起動毎のブートストラップ）
+### ① ブートストラップ（git clone を正とする、起動毎）
 
-サンドボックスは実行毎に揮発するため、Skill は毎回これを先頭で叩く:
+**コードは OneDrive コピーから読まない**。OneDrive Files-On-Demand のプレースホルダは Cowork の Linux マウント越しに中身が途中で切れて読めず（2026-05-30 実測、`attrib +P` でも安定解消せず）、無人スケジュール実行では Windows Read で補正もできない。よって **コードは GitHub から git clone** してサンドボックスのネイティブ fs（`/outputs`）で実行する。OneDrive からは小サイズで完全に読める `.env` と SA 鍵だけを使う。
+
+`scripts/sandbox-bootstrap.sh` が clone→`.env` コピー→`pip install`→AST 検証まで行う。Skill 先頭での呼び出しは `docs/cowork-skill-reference.md` §6-1 を参照。要旨:
 
 ```bash
-PC=/sessions/*/mnt/51.LINE投稿ボット/pc_cli      # 実マウントは glob で解決
-cd $PC
-pip install -r requirements.txt --break-system-packages -q
+ONEDRIVE=$(ls -d /sessions/*/mnt/51.LINE投稿ボット/pc_cli | head -1)
+export GITHUB_PAT=$(grep -E '^GITHUB_PAT=' "$ONEDRIVE/.env" | head -1 | cut -d= -f2- | tr -d '\r')
+export REPO_REF=main
+curl -fsSL -H "Authorization: token $GITHUB_PAT" \
+  "https://raw.githubusercontent.com/k-probox-design/LineTaskCollection/$REPO_REF/scripts/sandbox-bootstrap.sh" -o /tmp/b.sh
+bash /tmp/b.sh
+cd /outputs/linetask/pc_worker && export PYTHONPATH="$PWD"
 ```
 
-依存はバイナリ wheel を含む `google-cloud-*` があるため vendoring せず **毎回 pip** とする（4 回/日・各数十秒の見込み。実測は初回スモークで確定）。
+依存はバイナリ wheel を含む `google-cloud-*` があるため vendoring せず **毎回 pip**（実測 約6秒、2026-05-30）。`/outputs` から動かしても `mounts.py` の glob フォールバックで `@@@`/winpath は解決される。
 
 ### ② 認証（GCP サービスアカウント鍵）
 
@@ -398,9 +404,15 @@ pip install -r requirements.txt --break-system-packages -q
 
 特定した (unix 接頭辞 ↔ windows 接頭辞) の写像で、`destination_windows` 等の出力を正しい `C:\...` 形へ戻す（winpath 一般化）。詳細仕様は `docs/cowork-skill-reference.md`「マウント解決と winpath 一般化」。
 
-### ④ .env の用意
+### ④ .env の用意（けいすけ手作業）
 
-`pc_cli/.env.sandbox.example`（既知値記入済み）を `.env` にコピーし、けいすけが **`NOTION_API_KEY` の記入**と **`secrets/linetask-puller.json` への鍵配置**の 2 点だけ行えば動く（`NOTION_DATABASE_ID_DESIGN_TASK` / `GCS_BUCKET` / `FIRESTORE_PROJECT` / `MOUNT_MAP` / パス系は記入済み）。
+`pc_cli/.env.sandbox.example`（既知値記入済み）を OneDrive `pc_cli/.env` にコピーし、けいすけが下記 3 点を行えば動く（`NOTION_DATABASE_ID_DESIGN_TASK` / `GCS_BUCKET` / `FIRESTORE_PROJECT` / `NOTION_DATA_SOURCE_ID` / `MOUNT_MAP` / パス系は記入済み）:
+
+1. `NOTION_API_KEY` を記入
+2. `secrets/linetask-puller.json` に GCP SA 鍵を配置（`GOOGLE_APPLICATION_CREDENTIALS` は記入済み）
+3. **`GITHUB_PAT` を記入** — GitHub fine-grained PAT（対象 repo = `k-probox-design/LineTaskCollection` のみ、権限 = Contents:Read のみ、有効期限は任意）。サンドボックスが git clone でコードを取得するために使う。作成は GitHub → Settings → Developer settings → Fine-grained tokens。
+
+`.env` は OneDrive 配下にあり小サイズなのでマウント越しに完全に読める（コード本体と違いハイドレート問題は起きない）。
 
 ---
 

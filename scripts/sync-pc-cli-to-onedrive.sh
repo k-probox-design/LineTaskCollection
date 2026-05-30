@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # pc_cli の「正」(WSL リポジトリ pc_worker/) を OneDrive 配下の実行用コピー(pc_cli/)へ同期する。
 #
+# ★ 役割（2026-05-30 更新）: Cowork サンドボックスでの本番実行は OneDrive コピーではなく
+#   GitHub からの git clone（scripts/sandbox-bootstrap.sh）を正とする。OneDrive プレースホルダは
+#   サンドボックスの Linux マウント越しに中身が途中で切れるため（恒久対策＝git）。本スクリプトの
+#   OneDrive コピーは「WSL ローカル開発」と「git 不達時のフォールバック」「.env.sandbox.example の配布」用。
+#   それでも OneDrive コピーを少しでも読めるよう、同期後に強制ハイドレート＋ピン留めを行う。
+#
 # 設計意図:
 #   - 正は常に WSL リポジトリ。OneDrive 側は Cowork サンドボックスから実行するための複製にすぎない。
 #   - .env と secrets/ は同期しない（けいすけが OneDrive 側に置いた秘密値を上書き・削除しないため）。
@@ -60,8 +66,14 @@ find "$DEST" -path "${DEST}secrets" -prune -o \
             -path "${DEST}pc_worker_logs" -prune -o \
             -print -exec touch {} + >/dev/null 2>&1 || true
 
+# (1.5) 強制ハイドレート: /mnt/c 越しに全 .py を読み切ると Windows がプレースホルダの実体を
+#       ローカルに materialize する。pin(+P) だけでは実体 DL を保証しないため先に読む。
+#       （注意: これは Windows 側のハイドレートを促すもので、Cowork の Linux マウントが追随する
+#        保証は無い。本番は git clone を正とする。）
+find "$DEST" -name '*.py' -type f -exec cat {} + >/dev/null 2>&1 || true
+
 # (2) OneDrive ピン留め: FILE_ATTRIBUTE_PINNED(+P) を立て、Free-up-space(-U) を外す。再帰(/S)・ディレクトリも(/D)。
-#     これで OneDrive が実体をローカルに保持し続け、Cowork マウントから常に完全な中身が読める。
+#     evict されないよう保持する（実体 DL は (1.5) で済ませる）。
 echo "[sync] OneDrive にピン留め中（attrib +P -U）..."
 if cmd.exe /c "attrib +P -U \"${WIN_PCCLI}\\*\" /S /D" >/dev/null 2>&1; then
   echo "[sync] ピン留め完了"
