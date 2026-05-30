@@ -278,3 +278,21 @@ Cowork 実機検証で 2 点判明し対応:
 - **バックフィル**: `server/scripts/backfill_group_names.py`（任意・一回限り）。LINE トークン＋Firestore が揃う server 環境（Cloud Shell 等）で実行。PC では実行しない。既定は新規受信ぶんのみ反映。
 
 D-1 同様 **Cloud Run 再デプロイで反映**（デプロイ後の受信ぶんから group_name）。テスト server 21→**26**、pc_worker 89→**91**。main マージ＋タグ＋デプロイはけいすけ明示確認後。
+
+## 2026-05-31 — 【障害】rev 00005 で新着グループ投稿の取り込み欠落 → ロールバック＋保存順序の恒久修正
+
+### 事象
+グループ名デプロイ（rev `linetask-receive-00005-4kr`）後、テスト投稿がメッセージとして保存されず `list-messages` に出ない。ログ確認: 15:12:01Z に `[TEXT] groupId=Cd42… text=姫路養鶏場明日見積依頼したい` は出るが、その後 `[FIRESTORE] recorded` が無い（webhook は 200）。
+
+### 原因
+受信処理は FastAPI **BackgroundTask（200 応答後に実行）**。その中で **`record_message`(保存) より前に LINE プロフィール/グループ summary の HTTP 呼び出し**を行っていた（`meta.update(sender_fields(...))` が保存前）。Cloud Run 既定の**レスポンス後 CPU スロットル**でバックグラウンドタスクが HTTP 中に停止し、保存に到達せず取りこぼし。00005 が summary 呼び出しを追加して停止窓が広がり顕在化（00004/D-1 も保存前 HTTP の潜在リスクあり）。
+
+### 対応
+- **即時ロールバック**: traffic を `linetask-receive-00004-w2p` へ 100%（けいすけ明示確認後に実施）。/health 200・traffic 100% 確認。
+- **恒久修正（work/2026-05-31）**: `record_message`（保存）を **HTTP より前**に実行。送信者表示名・グループ名は **保存後の best-effort**（`_enrich_after_save`）に分離。`senderUserId` は event 内＝HTTP 不要なので保存時 meta に入れ、`senderDisplayName` は保存後 `update_message` で付与。`firestore.update_message` 追加。profile の httpx timeout 10→5s。
+- **回帰テスト**: 「表示名/グループ名解決が例外でもメッセージは保存される」を text/media 双方で追加。server 26→**28 pass**。
+- 推奨（任意・要けいすけ判断）: 再デプロイ時に `--no-cpu-throttling`（CPU 常時割当）を付けるとバックグラウンドタスクのスロットル自体を排除でき、より堅牢（コスト微増）。
+
+### 運用メモ
+- gcloud は git-bash の MSYS パス変換で `/home/...`→`C:/Program Files/Git/...` に化け失敗することがある → **gcloud は PowerShell ツール経由で wsl 実行**、`CLOUDSDK_PYTHON` を bundled python に固定。
+- 再デプロイ（main マージ＋タグ＋deploy）はけいすけ明示確認後。

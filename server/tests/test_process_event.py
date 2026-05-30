@@ -18,11 +18,12 @@ def _env_vars():
 
 @pytest.fixture(autouse=True)
 def _no_group_net():
-    # 既定でグループ名解決を None にして実ネットワークを避ける（個別テストで上書き可）。
+    # 既定で表示名/グループ名解決を None にして実ネットワークを避ける（個別テストで上書き可）。
     # _group_synced はモジュール常駐なのでテスト毎にクリア。
     from app import line_webhook
     line_webhook._group_synced.clear()
-    with patch("app.profile.resolve_group_name", return_value=None):
+    with patch("app.profile.resolve_group_name", return_value=None), \
+         patch("app.profile.resolve_display_name", return_value=None):
         yield
     line_webhook._group_synced.clear()
 
@@ -63,7 +64,9 @@ class TestStoreMetadataText:
             })
 
     def test_text_with_sender_resolved(self):
+        # senderUserId は保存時 meta（HTTP 不要）、senderDisplayName は保存後 update_message で付与
         with patch("app.firestore.record_message") as mock_record, \
+             patch("app.firestore.update_message") as mock_update, \
              patch("app.profile.resolve_display_name", return_value="山田太郎"):
             from app.line_webhook import _store_metadata
             event = {
@@ -74,7 +77,8 @@ class TestStoreMetadataText:
             _store_metadata(event)
             meta = mock_record.call_args[0][1]
             assert meta["senderUserId"] == "Uuser1"
-            assert meta["senderDisplayName"] == "山田太郎"
+            assert "senderDisplayName" not in meta  # 保存時 meta には入れない
+            mock_update.assert_called_once_with("msg010", {"senderDisplayName": "山田太郎"})
 
     def test_group_name_saved_on_text(self):
         with patch("app.firestore.record_message"), \
@@ -106,6 +110,7 @@ class TestStoreMetadataText:
 
     def test_text_with_sender_name_unresolved_keeps_userid(self):
         with patch("app.firestore.record_message") as mock_record, \
+             patch("app.firestore.update_message") as mock_update, \
              patch("app.profile.resolve_display_name", return_value=None):
             from app.line_webhook import _store_metadata
             event = {
@@ -117,6 +122,22 @@ class TestStoreMetadataText:
             meta = mock_record.call_args[0][1]
             assert meta["senderUserId"] == "Uuser2"
             assert "senderDisplayName" not in meta
+            mock_update.assert_not_called()  # 名前が取れなければ update しない
+
+    def test_text_saved_even_if_enrichment_raises(self):
+        # ★回帰: 表示名/グループ名解決が例外でも、メッセージ保存は完了する（取り込み欠落バグ再発防止）
+        with patch("app.firestore.record_message") as mock_record, \
+             patch("app.profile.resolve_display_name", side_effect=Exception("profile down")), \
+             patch("app.profile.resolve_group_name", side_effect=Exception("summary down")):
+            from app.line_webhook import _store_metadata
+            event = {
+                "type": "message",
+                "source": {"type": "group", "groupId": "Cabc123", "userId": "U9"},
+                "message": {"type": "text", "id": "msg012", "text": "保存されるべき"},
+            }
+            _store_metadata(event)  # 例外が伝播しないこと
+            mock_record.assert_called_once()
+            assert mock_record.call_args[0][1]["text"] == "保存されるべき"
 
 
 class TestStoreMedia:
@@ -144,13 +165,26 @@ class TestStoreMedia:
     def test_media_with_sender_resolved(self):
         with patch("app.gcs.upload_to_pending", return_value="gs://bucket/pending/123_m.pdf"), \
              patch("app.firestore.record_message") as mock_record, \
+             patch("app.firestore.update_message") as mock_update, \
              patch("app.profile.resolve_display_name", return_value="田口"):
             from app.line_webhook import _store_media
             _store_media(b"data", "m005", ".pdf", "Cabc123", "file", "zumen.pdf", "Uuser3")
             meta = mock_record.call_args[0][1]
             assert meta["senderUserId"] == "Uuser3"
-            assert meta["senderDisplayName"] == "田口"
+            assert "senderDisplayName" not in meta  # 保存後 update で付与
             assert meta["fileName"] == "zumen.pdf"
+            mock_update.assert_called_once_with("m005", {"senderDisplayName": "田口"})
+
+    def test_media_saved_even_if_enrichment_raises(self):
+        # ★回帰: media も enrichment 例外で保存が落ちない（保存は GCS upload 後・HTTP より前）
+        with patch("app.gcs.upload_to_pending", return_value="gs://bucket/pending/x.pdf"), \
+             patch("app.firestore.record_message") as mock_record, \
+             patch("app.profile.resolve_display_name", side_effect=Exception("down")), \
+             patch("app.profile.resolve_group_name", side_effect=Exception("down")):
+            from app.line_webhook import _store_media
+            _store_media(b"d", "m006", ".pdf", "Cabc123", "file", "z.pdf", "U9")
+            mock_record.assert_called_once()
+            assert mock_record.call_args[0][1]["gcsPath"] == "gs://bucket/pending/x.pdf"
 
     def test_exception_logged_not_raised(self):
         with patch("app.gcs.upload_to_pending", side_effect=Exception("GCS error")), \

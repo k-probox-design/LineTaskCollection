@@ -33,7 +33,7 @@ def resolve_display_name(group_id: str | None, user_id: str | None) -> str | Non
     headers = {"Authorization": f"Bearer {settings.line_channel_access_token}"}
 
     try:
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=5.0) as client:
             resp = client.get(url, headers=headers)
             resp.raise_for_status()
             name = resp.json().get("displayName")
@@ -60,7 +60,7 @@ def resolve_group_name(group_id: str | None) -> str | None:
     url = f"https://api.line.me/v2/bot/group/{group_id}/summary"
     headers = {"Authorization": f"Bearer {settings.line_channel_access_token}"}
     try:
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=5.0) as client:
             resp = client.get(url, headers=headers)
             resp.raise_for_status()
             name = resp.json().get("groupName")

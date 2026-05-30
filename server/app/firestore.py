@@ -43,3 +43,9 @@ def record_message(message_id: str, meta: dict) -> None:
     meta.setdefault("receivedAt", datetime.now(timezone.utc))
     doc_ref.set(meta)
     logger.info("[FIRESTORE] recorded intake_messages/%s", message_id)
+
+
+def update_message(message_id: str, fields: dict) -> None:
+    """既存メッセージ doc に後追いでフィールドを足す（merge）。送信者表示名の事後付与に使う。"""
+    _get_client().collection("intake_messages").document(message_id).set(fields, merge=True)
+    logger.info("[FIRESTORE] updated intake_messages/%s %s", message_id, list(fields))
