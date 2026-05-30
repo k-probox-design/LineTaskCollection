@@ -287,7 +287,8 @@ list-messages --group-id <gid> [--around-doc <doc_id> | --since <iso> --until <i
 
 - `--around-doc <doc_id>`: その doc の `receivedAt` を中心に ±`window-hours`。資料 doc を中心に前後会話を取る糖衣。
 - `--around-doc` 無しは `--since`/`--until`（ISO8601）で範囲指定。どちらも無ければ範囲無制限で最新 `--limit` 件。
-- 返す各要素（値が無いキーは省略）: `doc_id` / `group_id` / `received_at`(ISO, UTC) / `message_type`(text/image/file/join 等) / `text` / `status` / `file_name` / `has_gcs`(bool) / `sender_user_id` / `sender_display_name`。
+- 返す各要素（値が無いキーは省略）: `doc_id` / `group_id` / `received_at`(ISO, UTC) / `message_type`(text/image/file/join 等) / `text` / `status` / `file_name` / `has_gcs`(bool) / `sender_user_id` / `sender_display_name` / `group_name`。
+- `group_name` は `intake_groups.groupName`（受信側が LINE group summary API で解決保存した実グループ名）。グループ投稿なら実名、1:1/room や未取得は付かない。議事ログの部屋名に最優先で使う（Skill §4: group_name → room_names.txt → 自動ラベル）。
 
 ### 7-2. 議事ログ HTML 化（write-log --filename）
 

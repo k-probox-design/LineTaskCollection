@@ -16,6 +16,17 @@ def _env_vars():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _no_group_net():
+    # 既定でグループ名解決を None にして実ネットワークを避ける（個別テストで上書き可）。
+    # _group_synced はモジュール常駐なのでテスト毎にクリア。
+    from app import line_webhook
+    line_webhook._group_synced.clear()
+    with patch("app.profile.resolve_group_name", return_value=None):
+        yield
+    line_webhook._group_synced.clear()
+
+
 class TestStoreMetadataJoin:
     def test_upsert_group_called(self):
         with patch("app.firestore.upsert_group") as mock_upsert, \
@@ -64,6 +75,34 @@ class TestStoreMetadataText:
             meta = mock_record.call_args[0][1]
             assert meta["senderUserId"] == "Uuser1"
             assert meta["senderDisplayName"] == "山田太郎"
+
+    def test_group_name_saved_on_text(self):
+        with patch("app.firestore.record_message"), \
+             patch("app.profile.resolve_group_name", return_value="姫路農場グループ"), \
+             patch("app.firestore.set_group_name") as mock_set:
+            from app.line_webhook import _store_metadata
+            event = {
+                "type": "message",
+                "source": {"type": "group", "groupId": "Cabc123", "userId": "U1"},
+                "message": {"type": "text", "id": "m020", "text": "x"},
+            }
+            _store_metadata(event)
+            mock_set.assert_called_once_with("Cabc123", "姫路農場グループ")
+
+    def test_group_name_synced_once_per_instance(self):
+        with patch("app.firestore.record_message"), \
+             patch("app.profile.resolve_group_name", return_value="G") as mock_resolve, \
+             patch("app.firestore.set_group_name"):
+            from app.line_webhook import _store_metadata
+            ev = lambda i: {
+                "type": "message",
+                "source": {"type": "group", "groupId": "Csame", "userId": "U"},
+                "message": {"type": "text", "id": i, "text": "x"},
+            }
+            _store_metadata(ev("a"))
+            _store_metadata(ev("b"))
+            # 2 回目は _group_synced により解決をスキップ
+            mock_resolve.assert_called_once()
 
     def test_text_with_sender_name_unresolved_keeps_userid(self):
         with patch("app.firestore.record_message") as mock_record, \

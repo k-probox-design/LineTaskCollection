@@ -161,11 +161,29 @@ def list_messages(
     rows.sort(key=lambda r: r[0])
     rows = rows[:limit]
     items = [_msg_to_entry(d) for _, d in rows]
+
+    # グループ名（intake_groups.groupName、受信側が解決保存）を各要素に付与。無ければ付けない。
+    group_name = _group_name(group_id)
+    if group_name:
+        for it in items:
+            it["group_name"] = group_name
+
     logger.info(
-        "[PULL] list_messages group=%s returned %d (around=%s, window=%dh, limit=%d)",
-        group_id, len(items), around_doc, window_hours, limit,
+        "[PULL] list_messages group=%s (%s) returned %d (around=%s, window=%dh, limit=%d)",
+        group_id, group_name, len(items), around_doc, window_hours, limit,
     )
     return items
+
+
+def _group_name(group_id: str) -> str | None:
+    """intake_groups/{groupId}.groupName を引く。未取得なら None。"""
+    try:
+        snap = _firestore().collection("intake_groups").document(group_id).get()
+        if snap.exists:
+            return (snap.to_dict() or {}).get("groupName")
+    except Exception:
+        logger.warning("[PULL] intake_groups の groupName 取得に失敗 group=%s", group_id)
+    return None
 
 
 def download(doc_id: str, dest_dir: str) -> Path:

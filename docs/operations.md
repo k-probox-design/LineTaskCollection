@@ -294,6 +294,8 @@ stdout は結果 JSON のみ、ログは stderr（+ `LOG_OUTPUT_DIR` ファイ�
 
 **送信者（Phase B 拡張 2026-05-30）**: `list-messages` / `pull-pending` は受信側が保存していれば `sender_user_id` / `sender_display_name` を返す。Cloud Run 受信側がこの対応を入れた後に受信したメッセージのみ保持（過去分は遡及不可）。Cowork は議事ログの発言者表示に使う。
 
+**グループ名（Phase B 拡張 2026-05-30）**: 受信側が LINE group summary API（`GET /v2/bot/group/{groupId}/summary`）で実グループ名を解決し `intake_groups.groupName` に保存。`list-messages` は各要素に `group_name` を付与（グループ投稿は実名、1:1/room や未取得は付かない）。新規受信ぶんから有効（過去分は `server/scripts/backfill_group_names.py` を server 環境で実行すれば補完可。LINE トークンが要るため PC では実行しない）。
+
 LINE 由来資料（画像/PDF/議事ログ）は案件フォルダ配下の **`09.LINEやりとり資料/` に統一**して格納する（`09.受領資料` は使わない）。`09.LINEやりとり資料/` は存在しなければ pc_cli が自動作成（案件フォルダ自体の自動作成はしない）。
 
 ### 実行例とサンプル出力
