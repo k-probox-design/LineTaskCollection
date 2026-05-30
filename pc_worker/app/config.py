@@ -32,6 +32,16 @@ class _Settings:
         return os.environ.get("NOTION_DATA_SOURCE_ID", "")
 
     @property
+    def notion_default_priority(self) -> str:
+        # write-task の既定優先度。ボット起因の目印（実 DB に option「Claude追記」あり）
+        return os.environ.get("NOTION_DEFAULT_PRIORITY", "Claude追記")
+
+    @property
+    def notion_default_assignee_user_id(self) -> str:
+        # 担当(person)に既定でセットする Notion user_id。未設定なら担当を触らない
+        return os.environ.get("NOTION_DEFAULT_ASSIGNEE_USER_ID", "")
+
+    @property
     def gcs_bucket(self) -> str:
         return os.environ.get("GCS_BUCKET", "probox-linetask-prod-intake")
 

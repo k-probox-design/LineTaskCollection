@@ -69,22 +69,33 @@ def test_write_task_passes_args():
         result = runner.invoke(app, ["write-task", "--case", "佐藤邸", "--title", "見積", "--note", "n"])
     assert result.exit_code == 0
     assert _stdout_json(result)["page_id"] == "p"
-    m.assert_called_once_with("佐藤邸", "見積", "仕分け待ち", "n", None)
+    # priority/assignee 未指定は None で渡し、既定解決は notion_writer 側（既定優先度 Claude追記 / 担当 env）
+    m.assert_called_once_with("佐藤邸", "見積", None, "n", None, None)
+
+
+def test_write_task_passes_assignee():
+    with patch("app.cli.notion_writer.write_task", return_value={"page_id": "p", "url": "u"}) as m:
+        result = runner.invoke(app, [
+            "write-task", "--case", "A", "--title", "t",
+            "--priority", "高", "--assignee-user-id", "U-keisuke",
+        ])
+    assert result.exit_code == 0
+    assert m.call_args.args == ("A", "t", "高", None, None, "U-keisuke")
 
 
 def test_update_task_passes_priority():
     with patch("app.cli.notion_writer.update_task", return_value={"page_id": "p", "updated_fields": ["priority"]}) as m:
         result = runner.invoke(app, ["update-task", "--page-id", "p", "--priority", "高"])
     assert result.exit_code == 0
-    m.assert_called_once_with("p", None, None, "高", None, None, None)
+    m.assert_called_once_with("p", None, None, "高", None, None, None, None)
 
 
 def test_update_task_passes_status():
     with patch("app.cli.notion_writer.update_task", return_value={"page_id": "p", "updated_fields": ["status"]}) as m:
         result = runner.invoke(app, ["update-task", "--page-id", "p", "--status", "完了"])
     assert result.exit_code == 0
-    # status は 7 番目の引数
-    assert m.call_args.args == ("p", None, None, None, None, None, "完了")
+    # 引数順: page_id, case, title, priority, note, onedrive_link, status, assignee_user_id
+    assert m.call_args.args == ("p", None, None, None, None, None, "完了", None)
 
 
 def test_list_case_folders_outputs_array():

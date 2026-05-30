@@ -10,4 +10,6 @@ def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("GCS_BUCKET", "probox-linetask-prod-intake")
     monkeypatch.delenv("MOUNT_MAP", raising=False)
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    monkeypatch.delenv("NOTION_DEFAULT_PRIORITY", raising=False)
+    monkeypatch.delenv("NOTION_DEFAULT_ASSIGNEE_USER_ID", raising=False)
     yield

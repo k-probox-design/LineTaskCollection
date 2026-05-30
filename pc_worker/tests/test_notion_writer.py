@@ -64,7 +64,10 @@ def test_write_task_payload(monkeypatch):
     }
     props = client.pages.create.call_args.kwargs["properties"]
     assert props[PROP_TITLE]["title"][0]["text"]["content"] == "【LINE】2026-05-29 見積書"
-    assert props[PROP_PRIORITY]["select"]["name"] == "仕分け待ち"
+    # priority 未指定 → 既定 "Claude追記"（ボット起因の目印）
+    assert props[PROP_PRIORITY]["select"]["name"] == "Claude追記"
+    # 既定 assignee 未設定なので担当は付かない
+    assert "担当" not in props
     note = props["備考"]["rich_text"][0]["text"]["content"]
     assert "案件: コスモス" in note
     assert "確信度 0.9" in note
@@ -94,6 +97,36 @@ def test_update_task_only_specified_fields():
     assert props[PROP_ONEDRIVE]["url"] == "file:///c/y.pdf"
     assert PROP_TITLE not in props  # title 未指定なら更新しない
     client.databases.retrieve.assert_not_called()
+
+
+def test_write_task_sets_assignee_from_env(monkeypatch):
+    monkeypatch.setenv("NOTION_DEFAULT_ASSIGNEE_USER_ID", "U-keisuke")
+    client = _client_with_data_source()
+    client.pages.create.return_value = {"id": "p", "url": "u"}
+    with patch("app.notion_writer._get_client", return_value=client):
+        write_task(case="A", title="t")
+    props = client.pages.create.call_args.kwargs["properties"]
+    assert props["担当"] == {"people": [{"object": "user", "id": "U-keisuke"}]}
+
+
+def test_write_task_priority_override_and_explicit_assignee(monkeypatch):
+    monkeypatch.setenv("NOTION_DEFAULT_PRIORITY", "Claude追記")
+    client = _client_with_data_source()
+    client.pages.create.return_value = {"id": "p", "url": "u"}
+    with patch("app.notion_writer._get_client", return_value=client):
+        write_task(case="A", title="t", priority="高", assignee_user_id="U-x")
+    props = client.pages.create.call_args.kwargs["properties"]
+    assert props[PROP_PRIORITY]["select"]["name"] == "高"  # 明示指定が既定に優先
+    assert props["担当"]["people"][0]["id"] == "U-x"
+
+
+def test_update_task_sets_assignee():
+    client = MagicMock()
+    with patch("app.notion_writer._get_client", return_value=client):
+        result = update_task("p", assignee_user_id="U-keisuke")
+    assert "assignee" in result["updated_fields"]
+    props = client.pages.update.call_args.kwargs["properties"]
+    assert props["担当"] == {"people": [{"object": "user", "id": "U-keisuke"}]}
 
 
 def test_update_task_sets_status_property():

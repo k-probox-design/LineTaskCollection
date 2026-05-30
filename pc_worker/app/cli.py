@@ -83,15 +83,16 @@ def list_cases_cmd(
 def write_task_cmd(
     case: str = typer.Option(..., "--case"),
     title: str = typer.Option(..., "--title"),
-    priority: str = typer.Option(notion_writer.PRIORITY_PENDING, "--priority"),
+    priority: str = typer.Option(None, "--priority", help="既定は NOTION_DEFAULT_PRIORITY（既定値 'Claude追記'）"),
     note: str = typer.Option(None, "--note"),
     onedrive_link: str = typer.Option(None, "--onedrive-link"),
+    assignee_user_id: str = typer.Option(None, "--assignee-user-id", help="担当(person)。既定は NOTION_DEFAULT_ASSIGNEE_USER_ID"),
     log_run_id: str = typer.Option(None, "--log-run-id"),
 ) -> None:
-    """Notion に新規タスク row を追加。"""
+    """Notion に新規タスク row を追加。担当・既定優先度で人別ビューに乗せる。"""
     _init_logging(log_run_id)
     try:
-        result = notion_writer.write_task(case, title, priority, note, onedrive_link)
+        result = notion_writer.write_task(case, title, priority, note, onedrive_link, assignee_user_id)
     except Exception as e:
         _fail("write-task failed", str(e))
     _emit(result)
@@ -106,12 +107,13 @@ def update_task_cmd(
     status: str = typer.Option(None, "--status", help="ステータス(status 型)を設定。完了化は '完了' 等（'通常' 優先度は実 DB に存在しない）"),
     note: str = typer.Option(None, "--note"),
     onedrive_link: str = typer.Option(None, "--onedrive-link"),
+    assignee_user_id: str = typer.Option(None, "--assignee-user-id", help="担当(person)を user_id で設定"),
     log_run_id: str = typer.Option(None, "--log-run-id"),
 ) -> None:
     """既存タスク row を部分更新。完了化は --status（status 型プロパティ「ステータス」）で行う。"""
     _init_logging(log_run_id)
     try:
-        result = notion_writer.update_task(page_id, case, title, priority, note, onedrive_link, status)
+        result = notion_writer.update_task(page_id, case, title, priority, note, onedrive_link, status, assignee_user_id)
     except Exception as e:
         _fail("update-task failed", str(e))
     _emit(result)

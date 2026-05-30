@@ -14,6 +14,7 @@ logger = logging.getLogger("notion_writer")
 PROP_TITLE = "タスク名"
 PROP_PRIORITY = "優先度"
 PROP_STATUS = "ステータス"
+PROP_ASSIGNEE = "担当"
 PROP_NOTE = "備考"
 PROP_ONEDRIVE = "OneDrive"
 PRIORITY_PENDING = "仕分け待ち"
@@ -92,15 +93,26 @@ def _compose_note(case: str | None, note: str | None) -> str:
 def write_task(
     case: str,
     title: str,
-    priority: str = PRIORITY_PENDING,
+    priority: str | None = None,
     note: str | None = None,
     onedrive_link: str | None = None,
+    assignee_user_id: str | None = None,
 ) -> dict:
-    """設計タスク管理 DB に row を新規作成。案件名は備考に記録する（案件プロパティは実 DB 未確認のため）。"""
+    """設計タスク管理 DB に row を新規作成。案件名は備考に記録する（案件プロパティは実 DB 未確認のため）。
+
+    priority 未指定なら既定（NOTION_DEFAULT_PRIORITY、既定値 "Claude追記"＝ボット起因の目印）。
+    担当(person)は assignee_user_id か NOTION_DEFAULT_ASSIGNEE_USER_ID をセット（人別ビューに乗せるため）。
+    どちらも無ければ担当を触らない（Notion 既定で作成者＝LineTaskBot になる）。
+    """
+    eff_priority = priority or settings.notion_default_priority
+    eff_assignee = assignee_user_id or settings.notion_default_assignee_user_id
+
     properties: dict = {
         PROP_TITLE: {"title": [{"text": {"content": title}}]},
-        PROP_PRIORITY: {"select": {"name": priority}},
+        PROP_PRIORITY: {"select": {"name": eff_priority}},
     }
+    if eff_assignee:
+        properties[PROP_ASSIGNEE] = {"people": [{"object": "user", "id": eff_assignee}]}
     note_text = _compose_note(case, note)
     if note_text:
         properties[PROP_NOTE] = {"rich_text": [{"text": {"content": note_text}}]}
@@ -124,6 +136,7 @@ def update_task(
     note: str | None = None,
     onedrive_link: str | None = None,
     status: str | None = None,
+    assignee_user_id: str | None = None,
 ) -> dict:
     """既存 row を部分更新。指定したフィールドのみ更新する。完了化は status（ステータス）で。"""
     properties: dict = {}
@@ -138,6 +151,9 @@ def update_task(
     if status is not None:
         properties[PROP_STATUS] = {"status": {"name": status}}
         updated.append("status")
+    if assignee_user_id is not None:
+        properties[PROP_ASSIGNEE] = {"people": [{"object": "user", "id": assignee_user_id}]}
+        updated.append("assignee")
     if case is not None or note is not None:
         properties[PROP_NOTE] = {"rich_text": [{"text": {"content": _compose_note(case, note)}}]}
         if case is not None:

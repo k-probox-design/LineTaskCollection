@@ -281,8 +281,8 @@ stdout は結果 JSON のみ、ログは stderr（+ `LOG_OUTPUT_DIR` ファイ�
 | `list-cases [--days=90]` | Notion から直近 N 日更新の案件名候補を出力 |
 | `list-case-folders [--root] [--max-depth=3] [--query <名前片>]` | SHAREPOINT_ROOT 配下を再帰スキャン。`--query` で名前一致のみ深く探索（不揃いな深さ対応、bug2）|
 | `list-messages --group-id [--around-doc \| --since --until] [--window-hours=48] [--limit=200]` | 同一グループの前後メッセージを時系列で返す（議事ログ素材。関連判断は Cowork）|
-| `write-task --case --title [--priority=仕分け待ち] [--note] [--onedrive-link]` | Notion 新規 row |
-| `update-task --page-id [--case --title --priority --status --note --onedrive-link]` | Notion 部分更新。**完了化は `--status 完了`（status 型「ステータス」）**。優先度に "通常" は無い |
+| `write-task --case --title [--priority] [--note] [--onedrive-link] [--assignee-user-id]` | Notion 新規 row。既定優先度 `Claude追記`（`NOTION_DEFAULT_PRIORITY`）、担当に `NOTION_DEFAULT_ASSIGNEE_USER_ID` をセット（人別ビュー対応）|
+| `update-task --page-id [--case --title --priority --status --note --onedrive-link --assignee-user-id]` | Notion 部分更新。**完了化は `--status 完了`（status 型「ステータス」）**。優先度に "通常" は無い |
 | `place-file --src --case-folder --title [--date]` | 案件フォルダ配下の 09.LINEやりとり資料/ に配置。`--case-folder`/`--src` は Windows パス可（実行時に実マウントへ解決、bug1）|
 | `write-log --case-folder --date --content [--filename]` | 議事ログを 09.LINEやりとり資料/ に書き込み（上書き、`--content -` で stdin）。既定名 `<date> 議事ログ.md`、`--filename` で HTML 等の任意名 |
 | `mark-done <doc_id>` | Firestore done + GCS 削除 |
@@ -290,7 +290,7 @@ stdout は結果 JSON のみ、ログは stderr（+ `LOG_OUTPUT_DIR` ファイ�
 
 全サブコマンドに `--log-run-id=<外部ID>` オプションがあり、Cowork 側から共通 run_id を渡して同一仕分けセッションのログを束ねられる。
 
-**Notion 優先度/ステータス（実 DB 確認 2026-05-30）**: 優先度 select の option は `仕分け待ち / すぐ / 高 / 中 / 低 / 趣味`（**"通常" は存在しない**）。仕分け完了の表現は優先度ではなく status 型プロパティ **`ステータス`**（`完了 / 不要 / レイアウト完了 / 進行中 / …`）で行う。LINE 受信は従来どおり `--priority 仕分け待ち` で投入し、完了時は `update-task --status <値>`。どの完了値を使うかはけいすけ最終確認待ち。
+**Notion 優先度/ステータス/担当（実 DB 確認 2026-05-30）**: 優先度 select の option は `Claude追記 / 仕分け待ち / すぐ / 高 / 中 / 低 / 趣味`（**"通常" は存在しない**）。`Claude追記`（紫）はボット起因の目印で write-task の既定。`担当`(person 型) に既定ユーザー（`NOTION_DEFAULT_ASSIGNEE_USER_ID`、けいすけ）をセットして人別ビューに乗せる（未設定だと作成者＝LineTaskBot になり人別グループから外れる）。仕分け完了の表現は優先度ではなく status 型プロパティ **`ステータス`**（`完了 / 不要 / レイアウト完了 / 進行中 / …`、既定 `未着手`）で行う。完了時は `update-task --status <値>`。完了化を優先度（Claude追記→本来値）で管理するか status で管理するかはけいすけ宿題（未確定）。
 
 **送信者（Phase B 拡張 2026-05-30）**: `list-messages` / `pull-pending` は受信側が保存していれば `sender_user_id` / `sender_display_name` を返す。Cloud Run 受信側がこの対応を入れた後に受信したメッセージのみ保持（過去分は遡及不可）。Cowork は議事ログの発言者表示に使う。
 

@@ -248,3 +248,13 @@ Notion 修正の再スモークで、OneDrive 実行コピー `51.LINE投稿ボ�
 - **Cloud Run 再デプロイが必要**（本番反映）。デプロイはけいすけ確認後（タグ・main マージと合わせて）に実施＝このタスクでは未デプロイ。
 
 テスト: pc_worker 67→**82 pass**、server 13→**21 pass**。
+
+### write-task の担当・既定優先度（統合指示 B、2026-05-30 追加）
+
+人別ビュー運用に乗せるため `write_task` を拡張。
+- **担当**(person 型) に `NOTION_DEFAULT_ASSIGNEE_USER_ID`（けいすけ `1b2d872b-594c-81ad-a589-00021d50994d`）を既定セット。`--assignee-user-id` で個別指定可。未設定なら担当を触らない。
+- **既定優先度を `Claude追記`**（`NOTION_DEFAULT_PRIORITY` で上書き可）。紫＝ボット起因の目印。実 DB に option 追加済み（けいすけ）。
+- `update-task --assignee-user-id` も追加。
+- `write-task --priority` の既定は None にし、未指定時は writer 側で既定解決（典型値が `.env` に集約）。
+
+pc_worker 82→**86 pass**。完了化を優先度/ステータスのどちらで管理するか（mark-done 後の Notion 更新方針）は引き続きけいすけ宿題。

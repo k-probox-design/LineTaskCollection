@@ -281,8 +281,9 @@ list-messages --group-id <gid> [--around-doc <doc_id> | --since <iso> --until <i
 - **この対応が Cloud Run にデプロイされた後に受信したメッセージのみ**送信者を持つ（過去分は webhook 原データに userId が無く遡及不可）。
 - `list-messages` の `sender_display_name`（無ければ `sender_user_id`、それも無ければ「発言者不明」）を議事ログの発言者表示に使う。
 
-### 7-4. Notion 優先度・ステータス（実 DB 確認 2026-05-30）
+### 7-4. Notion 優先度・ステータス・担当（実 DB 確認 2026-05-30）
 
-- 優先度 select option: `仕分け待ち / すぐ / 高 / 中 / 低 / 趣味`。**"通常" は存在しない**。
-- 仕分け完了の表現は status 型プロパティ **`ステータス`**（option: `未着手 / 情報待ち / 進行中 / 依頼中 / 中断中 / 中村確認待 / 修正依頼済 / 社内確認待 / レイアウト完了 / 不要 / 完了`）で行う。
-- 投入は `--priority 仕分け待ち`、完了化は `update-task --status <値>`。どの完了値（`完了`? `レイアウト完了`? 別運用?）にするかはけいすけ最終確認待ち。
+- 優先度 select option: `Claude追記 / 仕分け待ち / すぐ / 高 / 中 / 低 / 趣味`。**"通常" は存在しない**。`Claude追記`（紫）はボット起因の目印で `write-task` の既定（`NOTION_DEFAULT_PRIORITY`）。
+- **担当**(person 型): `write-task` が `NOTION_DEFAULT_ASSIGNEE_USER_ID`（けいすけ user_id `1b2d872b-594c-81ad-a589-00021d50994d`）を自動セットして人別ビューに乗せる。`--assignee-user-id` で個別指定も可。未設定だと作成者＝LineTaskBot になり人別グループから外れる。
+- 完了の表現は status 型プロパティ **`ステータス`**（option: `未着手 / 情報待ち / 進行中 / 依頼中 / 中断中 / 中村確認待 / 修正依頼済 / 社内確認待 / レイアウト完了 / 不要 / 完了`、既定 `未着手`）。`update-task --status <値>`。
+- **宿題（けいすけ）**: 仕分け/完了の状態管理を「優先度（Claude追記→本来値）」と「ステータス（→完了）」のどちらで回すか、mark-done 後の Notion 更新方針が未確定。決まり次第 Cowork へ通知される。
