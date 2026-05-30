@@ -35,6 +35,8 @@ def list_case_folders(root: str | None = None, max_depth: int = 3) -> list[dict]
     if not base.is_dir():
         raise FileNotFoundError(f"root not found: {base}")
 
+    # マウント写像は filesystem 探索を伴うため、ディレクトリ毎ではなく 1 回だけ解決して使い回す
+    maps = settings.path_maps
     results: list[dict] = []
 
     def walk(path: Path, depth: int, parent_name: str | None) -> None:
@@ -53,7 +55,7 @@ def list_case_folders(root: str | None = None, max_depth: int = 3) -> list[dict]
                 "parent_folder_name": parent_name,
                 "depth": depth,
                 "absolute_path_unix": unix,
-                "absolute_path_windows": winpath.unix_to_windows(unix),
+                "absolute_path_windows": winpath.unix_to_windows(unix, maps),
                 "child_dir_count": _count_child_dirs(child),
                 "has_line_yaritori_folder": (child / LINE_SUBFOLDER).is_dir(),
                 "last_modified": _mtime_iso(child),

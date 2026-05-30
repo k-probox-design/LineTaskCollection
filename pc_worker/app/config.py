@@ -6,6 +6,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app import mounts, winpath
+
 try:
     from pythonjsonlogger.json import JsonFormatter  # python-json-logger v3+
 except ImportError:  # pragma: no cover
@@ -16,10 +18,6 @@ load_dotenv(_env_path)
 
 
 class _Settings:
-    @property
-    def anthropic_api_key(self) -> str:
-        return os.environ.get("ANTHROPIC_API_KEY", "")
-
     @property
     def notion_api_key(self) -> str:
         return os.environ.get("NOTION_API_KEY", "")
@@ -37,19 +35,55 @@ class _Settings:
         return os.environ.get("FIRESTORE_PROJECT", "probox-linetask-prod")
 
     @property
+    def mount_map(self) -> str:
+        return os.environ.get("MOUNT_MAP", "")
+
+    @property
+    def path_maps(self) -> list[winpath.PathMap]:
+        """実行時に解決した (unix 接頭辞 ↔ windows 接頭辞) 写像。winpath 変換に渡す。"""
+        return mounts.discover_maps(self.mount_map)
+
+    # SHAREPOINT_ROOT / TMP_DOWNLOAD_DIR / LOG_OUTPUT_DIR は Windows パスでも unix パスでも
+    # 書ける。Windows 形式ならサンドボックスの動的マウントを解決して unix にしてから返す。
+    @property
     def sharepoint_root(self) -> str:
-        return os.environ.get("SHAREPOINT_ROOT", "")
+        return mounts.resolve_to_unix(os.environ.get("SHAREPOINT_ROOT", ""), self.path_maps)
 
     @property
     def tmp_download_dir(self) -> str:
-        return os.environ.get("TMP_DOWNLOAD_DIR", "")
+        return mounts.resolve_to_unix(os.environ.get("TMP_DOWNLOAD_DIR", ""), self.path_maps)
 
     @property
     def log_output_dir(self) -> str:
-        return os.environ.get("LOG_OUTPUT_DIR", "")
+        return mounts.resolve_to_unix(os.environ.get("LOG_OUTPUT_DIR", ""), self.path_maps)
 
 
 settings = _Settings()
+
+
+def to_windows(unix_path: str) -> str:
+    """unix パス → windows パス（実行時マウント写像込み）。CLI の出力整形で使う。"""
+    return winpath.unix_to_windows(unix_path, settings.path_maps)
+
+
+def normalize_google_credentials() -> str | None:
+    """GOOGLE_APPLICATION_CREDENTIALS が Windows パスならサンドボックスの実マウントへ解決し
+    os.environ に書き戻す（google-cloud ライブラリは os.environ を直接読むため）。
+
+    鍵ファイルが未設定なら何もしない（ADC 経路にフォールバック）。解決後パスが存在しない場合は
+    WARN のみで処理は止めない（認証失敗時に google ライブラリ側が明示エラーを出す）。
+    """
+    raw = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+    if not raw:
+        return None
+    resolved = mounts.resolve_to_unix(raw, settings.path_maps)
+    if resolved != raw:
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = resolved
+    if not Path(resolved).is_file():
+        logger.warning("[AUTH] GOOGLE_APPLICATION_CREDENTIALS のパスが見つかりません: %s", resolved)
+    else:
+        logger.info("[AUTH] サービスアカウント鍵を使用: %s", resolved)
+    return resolved
 
 logger = logging.getLogger("config")
 

@@ -500,6 +500,16 @@ Cowork 判断で確定した「以後の実装で従うルール」をここに�
 - データ設計(Notion DB「設計タスク管理」/「仕分け待ち」優先度 / Firestore status 遷移)は Phase C の確定事項を踏襲
 - **SHAREPOINT_ROOT 配下は階層・命名が不規則**(ステータスフォルダ配下案件 / 直接案件 / 非案件 / 2〜3 階層混在)。固定パスを組み立てず、`list-case-folders` で候補を再帰スキャン → Cowork が案件名と突合 → 得た**絶対パス**を `place-file --case-folder` / `write-log --case-folder` に渡す。LINE 由来資料は `<案件フォルダ>/09.LINEやりとり資料/` に統一格納(サブフォルダ自動作成 OK、案件フォルダ自体の自動作成は NG=needs_review 運用)
 
+### Phase C' 実行経路(2026-05-30 確定、A 案 — 2026-05-29 A 方針を上書き)
+
+Cowork の bash は **WSL ではなく独立した Linux サンドボックス**(Ubuntu 22 / Python 3.10)。マウントは OneDrive の選択フォルダのみ(`/sessions/<動的セッション名>/mnt/<フォルダ名>/`、セッション名は実行毎に変わる)、WSL リポジトリには未到達、ネットワークは開。よって仕分けは **Cowork サンドボックス内で完結**させる(B 案=Cloud Run に HTTP API は不採用)。
+
+- **動的マウントパスの解決は pc_cli 側の責務**。`.env` の `MOUNT_MAP`(Windows 絶対パスの `;` 列挙)から、pc_cli が実行時に実マウント先を特定(①自身の位置から現セッション mnt ベース→②WSL `/mnt/c`→③`/sessions/*/mnt` glob)。Skill はセッション名を注入しない
+- **winpath 一般化**: (unix↔windows) 写像を最長一致適用、`/mnt/<drive>` をフォールバック。`destination_windows` 等が `/sessions/<動的>/mnt/@@@/...` でも `C:\...\@@@\...` に戻る
+- **パス系 .env(SHAREPOINT_ROOT / TMP_DOWNLOAD_DIR / LOG_OUTPUT_DIR / GOOGLE_APPLICATION_CREDENTIALS)は Windows パスでも unix パスでも記述可**(Windows 形式なら実行時 unix 解決、WSL 開発は従来の `/mnt/c` 値で後方互換)
+- **GCP 認証は SA 鍵ファイル + ADC 両対応**(サンドボックスは鍵、WSL は ADC)。鍵 JSON は `51.LINE投稿ボット/secrets/`(同期・コミット対象外)
+- **正は WSL リポジトリ。OneDrive 実行コピーは `scripts/sync-pc-cli-to-onedrive.sh` で同期**(`.env` / `secrets/` は同期せず秘密値保護)。依存は `requirements.txt` 固定、揮発サンドボックスで起動毎に `pip install --break-system-packages`
+
 > 新しい決定をしたら、その都度ここを更新する。
 
 ---
@@ -509,6 +519,12 @@ Cowork 判断で確定した「以後の実装で従うルール」をここに�
 実装・運用で踏んだ罠と回避策を積み上げていくセクション。本セクションは空のまま開始、Phase A 着手後に蓄積する。
 
 ProboxDesign で実証済みの汎用教訓(autonomous 連続完走の規模圧縮要因 / 3 役運用 / 受け渡しフォルダ運用)はそのまま継承する。
+
+### Cowork サンドボックスの動的マウント(2026-05-30)
+
+- Cowork の bash は WSL ではなく**揮発する独立 Linux サンドボックス**。OneDrive 選択フォルダが `/sessions/<動的セッション名>/mnt/<フォルダ名>/` にマウントされ、**セッション名は実行毎に変わる**ので固定値に依存してはいけない。
+- 回避策: 実行コードは**自分自身の `__file__` パス**から現セッションの mnt ベースを割り出せる(`/sessions/<x>/mnt/...` 配下で動いているため)。これでセッション名注入なしに動的解決できる。glob `/sessions/*/mnt/<名>` は複数セッション残存時に誤るのでフォールバック扱い。
+- マウントのフォルダ名(末尾要素)から Windows 親パスは導けない(`@@@`→`...\@@@` だが `51.LINE投稿ボット`→`...\@@設計\51.LINE投稿ボット`)。Windows 側絶対パスは明示設定(`MOUNT_MAP`)が必要。
 
 ---
 

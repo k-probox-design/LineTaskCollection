@@ -144,3 +144,78 @@ SharePoint は階層・命名が不規則なので、案件フォルダは `list
 - 同 groupId 内で対象時刻の前後 N 時間（旧既定 24h）の text/file を時系列に並べる
 - Phase C' では Cowork がこの Markdown を組み立て、`pc_cli write-log --content` で書き込む
 - （`log_writer.build_session_log` は pc_worker に参照用として残置。Firestore からの集約が必要になったとき流用可）
+
+---
+
+## 6. サンドボックス実行の確定仕様（2026-05-30、実行経路 A 案）
+
+Cowork サンドボックス（Ubuntu 22 / Python 3.10 / OneDrive 選択フォルダのみマウント / ネットワーク開）から pc_cli を完動させるための、Skill が依拠する確定仕様。
+
+### 6-1. ブートストラップ（揮発サンドボックス、起動毎）
+
+サンドボックスは実行毎に揮発するため、Skill は毎回先頭でこれを実行する:
+
+```bash
+# pc_cli の実マウントを glob で特定（セッション名は動的なので固定しない）
+PC=$(ls -d /sessions/*/mnt/51.LINE投稿ボット/pc_cli 2>/dev/null | head -1)
+cd "$PC"
+pip install -r requirements.txt --break-system-packages -q
+export PYTHONPATH="$PC"
+RUN_ID="$(date +%Y%m%d-%H%M%S)-cowork"
+```
+
+- 依存は `requirements.txt`（バージョン固定、Python 3.10/3.12 双方で解決可）を毎回 pip。`google-cloud-*` のバイナリ wheel があるため vendoring はしない。所要は数十秒見込み（実測はスモークで確定）。
+- `.env` は `pc_cli/.env`（`.env.sandbox.example` をコピーしてけいすけが秘密値を記入済みの前提）。
+
+### 6-2. マウント解決と winpath 一般化（動的パスの吸収）
+
+**動的パス解決の責務は pc_cli 側**。Skill はセッション名を注入しなくてよい。`.env` のパス系は**静的な Windows 絶対パス**で書けば、pc_cli が実行時に実マウント先へ解決する。
+
+仕組み:
+
+- `.env` の `MOUNT_MAP` に、マウントしている Windows フォルダの絶対パスを `;` 区切りで列挙する。
+  ```
+  MOUNT_MAP=C:\Users\knaka\OneDrive - 株式会社ビギン\@@@;C:\Users\knaka\OneDrive - 株式会社ビギン\@@設計\51.LINE投稿ボット
+  ```
+- pc_cli は各エントリの「フォルダ名（末尾要素）」を、次の優先順で実マウント unix パスに解決する:
+  1. pc_cli 自身（`app/mounts.py`）の位置から現セッションの mnt ベース（`/sessions/<現>/mnt`）を割り出し `<base>/<フォルダ名>`
+  2. WSL の `/mnt/<drive>/...`（`windows_to_unix`）
+  3. `/sessions/*/mnt/<フォルダ名>` の glob
+- 解決した (unix 接頭辞 ↔ windows 接頭辞) の写像で、`SHAREPOINT_ROOT` 等の入力 Windows パスを unix に解決し、`destination_windows` / `absolute_path_windows` / `local_path_windows` 等の出力を `C:\...` 形に戻す。
+- 写像に当たらない `/mnt/c/...` は従来規則（`/mnt/c`→`C:`）でフォールバック。WSL 開発では `MOUNT_MAP` 空でも動く。
+
+**Skill が触る環境変数（.env、確定）**:
+
+| 変数 | 値の形 | 役割 |
+|------|--------|------|
+| `NOTION_API_KEY` | 秘密値（けいすけ記入） | Notion 認証 |
+| `NOTION_DATABASE_ID_DESIGN_TASK` | `1eb17f63-...`（記入済み） | 設計タスク管理 DB |
+| `GCS_BUCKET` / `FIRESTORE_PROJECT` | 記入済み | GCP リソース |
+| `GOOGLE_APPLICATION_CREDENTIALS` | SA 鍵パス（Windows 形可） | GCP 認証。未設定なら ADC |
+| `MOUNT_MAP` | Windows 絶対パスの `;` 列挙 | 動的マウント解決の種 |
+| `SHAREPOINT_ROOT` | Windows 絶対パス（例 `...\@@@`） | `list-case-folders` の起点 |
+| `TMP_DOWNLOAD_DIR` / `LOG_OUTPUT_DIR` | Windows 絶対パス | DL 先 / ログ複製先 |
+
+### 6-3. 認証
+
+- `GOOGLE_APPLICATION_CREDENTIALS` を設定 → SA 鍵認証。未設定 → ADC フォールバック（WSL 開発用）。
+- pc_cli は鍵パスが Windows 形式なら実マウントへ解決してから `os.environ` に書き戻す（`google-cloud` ライブラリが読む）。鍵 JSON は `51.LINE投稿ボット/secrets/` に置き、同期・コミットしない。
+
+### 6-4. スモーク手順（Cowork が実環境で答え合わせ）
+
+ブートストラップ後、各サブコマンドを順に叩いて期待挙動を確認する。`<doc_id>` は `pull-pending` 出力から拾う。
+
+| # | コマンド | 期待 |
+|---|---------|------|
+| 0 | `python -c "from app import mounts,config; print(config.settings.path_maps); print(config.settings.sharepoint_root)"` | 写像が `[(/sessions/<現>/mnt/@@@, C:\...\@@@), ...]`、sharepoint_root が `/sessions/<現>/mnt/@@@` |
+| 1 | `python -m app.cli pull-pending --limit 5 --log-run-id "$RUN_ID"` | stdout に pending メタの JSON 配列。Firestore 到達（SA 鍵）確認 |
+| 2 | `python -m app.cli download <doc_id> --log-run-id "$RUN_ID"` | `local_path_unix` が `/sessions/<現>/mnt/.../pc_worker_tmp/<doc_id>.<ext>`、`local_path_windows` が `C:\...` 形 |
+| 3 | `python -m app.cli list-cases --days 90 --log-run-id "$RUN_ID"` | Notion 案件候補の JSON 配列。Notion 到達確認 |
+| 4 | `python -m app.cli list-case-folders --max-depth 3 --log-run-id "$RUN_ID"` | `@@@` 配下の案件候補。各要素の `absolute_path_windows` が `C:\Users\knaka\OneDrive - 株式会社ビギン\@@@\...` 形 |
+| 5 | `python -m app.cli place-file --src <local> --case-folder "<手順4の絶対パス>" --title "スモーク" --log-run-id "$RUN_ID"` | `09.LINEやりとり資料/` に配置、`destination_windows` が `C:\...` 形、`created_subfolder` 真偽 |
+| 6 | `echo "# smoke" \| python -m app.cli write-log --case-folder "<同上>" --date "$(date +%F)" --content - --log-run-id "$RUN_ID"` | 同フォルダに `<date> 議事ログ.md` |
+| 7 | `python -m app.cli write-task --case "スモーク案件" --title "【LINE】スモーク" --log-run-id "$RUN_ID"` | `page_id` 返却。Notion に row |
+| 8 | `python -m app.cli mark-review <doc_id> --reason "smoke" --log-run-id "$RUN_ID"` | Firestore status=needs_review（mark-done は GCS 削除するのでスモークでは review 推奨）|
+
+- ④⑤⑥はテスト案件フォルダ（実害のない場所）で行うか、けいすけと確認した案件で行う。`mark-done` は GCS 実削除なので本番投稿のスモークでのみ。
+- `LOG_OUTPUT_DIR` 設定時は `<LOG_OUTPUT_DIR>/YYYY-MM-DD/$RUN_ID.jsonl` に各手順のログが追記される（監査用）。

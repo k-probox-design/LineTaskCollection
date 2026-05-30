@@ -358,13 +358,49 @@ pytest tests/ -v
 
 外部 API（GCS / Firestore / Notion）はすべてモック。
 
-### 実行環境（A 方針、2026-05-29 確定）
+### 実行環境（2026-05-29 A 方針 → 2026-05-30 実行経路 A 案で上書き）
 
-pc_cli は **WSL2 のリポジトリ内で開発・実行**する（OneDrive 配下へのコピー配置はしない）。
+> 2026-05-29 の A 方針（pc_cli は WSL でのみ実行、Cowork は監査のみ）は、2026-05-30 に Cowork の実行環境を実機確認した結果見直した。Cowork の bash は WSL ではなく**独立した Linux サンドボックス**で、マウントされるのは OneDrive の選択フォルダのみ・WSL リポジトリには到達不可だった。そこで pc_cli を**サンドボックスからも実行できる形**にし、仕分けをサンドボックス内で完結させる「実行経路 A 案」に確定。下記「Cowork サンドボックスからの実行」が現行手順。WSL 実行は引き続き開発・ローカルテスト用として有効。
 
-- `.env` は WSL 側 `pc_worker/.env` のみ。けいすけが WSL 上で直接編集
-- SharePoint 書き込みは WSL から `/mnt/c/Users/knaka/OneDrive - 株式会社ビギン/...` 経由で OneDrive 同期に委ねる（`SHAREPOINT_ROOT` を `/mnt/c/...` 形式で指定）
-- Cowork はコード本体・`.env`・実行コンソールに直接アクセスできないため、`.env.example` の受け渡しフォルダ共有と、下記のログ複製で監査経路を代替する
+開発の「正」は WSL リポジトリ `pc_worker/`。Cowork から実行するための複製を `scripts/sync-pc-cli-to-onedrive.sh` で OneDrive `51.LINE投稿ボット/pc_cli/` に同期する（`.env` / `secrets/` は同期せず、けいすけが置いた秘密値を保護）。
+
+---
+
+## Phase C': Cowork サンドボックスからの実行（2026-05-30 確定、実行経路 A 案）
+
+Cowork の bash は **Ubuntu 22 / Python 3.10 の揮発サンドボックス**。マウントは OneDrive の選択フォルダのみ（`/sessions/<動的セッション名>/mnt/<フォルダ名>/`、セッション名は実行毎に変わる）。ネットワークは開いている（Firestore / Notion / pypi 到達可）。この前提で pc_cli を完動させる。
+
+### ① 依存導入（起動毎のブートストラップ）
+
+サンドボックスは実行毎に揮発するため、Skill は毎回これを先頭で叩く:
+
+```bash
+PC=/sessions/*/mnt/51.LINE投稿ボット/pc_cli      # 実マウントは glob で解決
+cd $PC
+pip install -r requirements.txt --break-system-packages -q
+```
+
+依存はバイナリ wheel を含む `google-cloud-*` があるため vendoring せず **毎回 pip** とする（4 回/日・各数十秒の見込み。実測は初回スモークで確定）。
+
+### ② 認証（GCP サービスアカウント鍵）
+
+サンドボックスには ADC が無いため **SA 鍵ファイル**で認証する。`.env` の `GOOGLE_APPLICATION_CREDENTIALS` に鍵 JSON のパス（Windows 形式可）を書くと、pc_cli が実行時に実マウントへ解決して `google-cloud` ライブラリに渡す。鍵 JSON は `51.LINE投稿ボット/secrets/`（同期・コミット対象外）に置く。鍵の作成・IAM 付与はけいすけ手作業（SA 名 `linetask-puller`、`roles/datastore.user` ＋バケットに `roles/storage.objectAdmin`）。
+
+### ③ 動的マウントパスの実行時解決（最重要）
+
+`.env` のパス系（`SHAREPOINT_ROOT` / `TMP_DOWNLOAD_DIR` / `LOG_OUTPUT_DIR` / `GOOGLE_APPLICATION_CREDENTIALS`）は**静的な Windows 絶対パス**で書く。pc_cli が実行時に実マウント先へ解決するため、Skill 側でセッション名を注入する必要はない（動的解決の責務は pc_cli 側）。
+
+解決の鍵が `MOUNT_MAP`: Cowork にマウントしている Windows フォルダの絶対パスを `;` 区切りで列挙すると、pc_cli が以下の順で実マウント unix パスを特定する:
+
+1. pc_cli 自身の位置（`/sessions/<現セッション>/mnt/...` 配下）から現セッションの mnt ベースを割り出し `<base>/<フォルダ名>` を確認
+2. WSL の `/mnt/<drive>/...`
+3. `/sessions/*/mnt/<フォルダ名>` の glob
+
+特定した (unix 接頭辞 ↔ windows 接頭辞) の写像で、`destination_windows` 等の出力を正しい `C:\...` 形へ戻す（winpath 一般化）。詳細仕様は `docs/cowork-skill-reference.md`「マウント解決と winpath 一般化」。
+
+### ④ .env の用意
+
+`pc_cli/.env.sandbox.example`（既知値記入済み）を `.env` にコピーし、けいすけが **`NOTION_API_KEY` の記入**と **`secrets/linetask-puller.json` への鍵配置**の 2 点だけ行えば動く（`NOTION_DATABASE_ID_DESIGN_TASK` / `GCS_BUCKET` / `FIRESTORE_PROJECT` / `MOUNT_MAP` / パス系は記入済み）。
 
 ---
 

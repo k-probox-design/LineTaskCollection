@@ -146,3 +146,31 @@ Phase C' kickoff は `<SHAREPOINT_ROOT>/<案件名>/09.受領資料/` の固定�
 5. **案件フォルダ自体の自動作成 NG**: マッチする案件フォルダがなければ needs_review。けいすけが手動でフォルダ作成 → 再仕分け
 
 パストラバーサル対策（タイトルのサニタイズ + 案件フォルダ配下への封じ込め）は維持。`--case-folder` が存在しない場合は exit!=0 + `{"error":"case_folder_not_found"}`。
+
+## 2026-05-30 — Phase C' 実行経路を A 案（Cowork サンドボックス内で仕分け完結）に確定
+
+2026-05-29 の A 方針（pc_cli は WSL でのみ実行、Cowork は監査のみ）は、Cowork の実行環境を実機確認した結果見直した。
+
+### 確認した事実（Cowork 実機、2026-05-30）
+
+- Cowork の bash は WSL ではなく**独立した Linux サンドボックス**（Ubuntu 22 / Python 3.10）
+- マウントは OneDrive の選択フォルダのみ（`/sessions/<動的セッション名>/mnt/<フォルダ名>/`、セッション名は実行毎に変わる）。WSL リポジトリ・`@@@` には未到達（追加マウントで `@@@` は到達可に）
+- ターミナルへの自動入力は権限ティアでブロック（無人で WSL ターミナルを叩く道は無い）
+- ネットワークは開いている（Cloud Run / Firestore / Notion / pypi 到達可）
+
+### 決定（けいすけ承認済み）
+
+- 実行経路 **A 案**: pc_cli の実行・認証・`@@@` 参照を Cowork サンドボックスが届く場所（OneDrive 配下＋追加マウント）に寄せ、仕分けをサンドボックス内で完結させる。B 案（Cloud Run に HTTP API を生やす）は不採用。
+- Phase C の「実行は WSL 完結 / 鍵は WSL のみ / 鍵ファイル無し」は本件で見直し。
+
+### 実装（このタスク）
+
+- **動的マウントパスの実行時解決は pc_cli 側の責務**（`app/mounts.py` 新設）。`.env` の `MOUNT_MAP` に静的 Windows パスを列挙すれば、pc_cli が ①自身の位置から現セッション mnt ベース → ②WSL `/mnt/c` → ③`/sessions/*/mnt` glob の順で実マウントを特定。Skill はセッション名を注入しなくてよい。
+- **winpath 一般化**（`app/winpath.py`）: (unix 接頭辞 ↔ windows 接頭辞) 写像を最長一致で適用し、`/mnt/<drive>` 規則をフォールバックに残す。`destination_windows` 等が `/sessions/<動的>/mnt/@@@/...` でも `C:\...\@@@\...` に戻る。
+- **パス系 .env（SHAREPOINT_ROOT / TMP_DOWNLOAD_DIR / LOG_OUTPUT_DIR / GOOGLE_APPLICATION_CREDENTIALS）は Windows パスでも unix パスでも記述可**。Windows 形式なら実行時に unix へ解決（後方互換: WSL 開発は従来の `/mnt/c` 値のまま）。
+- **GCP 認証は SA 鍵ファイル（`GOOGLE_APPLICATION_CREDENTIALS`）＋ ADC 両対応**。鍵パスが Windows 形式なら実マウントへ解決して `os.environ` に書き戻す。鍵 JSON は `secrets/`（同期・コミット対象外）。
+- **依存はバージョン固定 `requirements.txt`**（Python 3.10/3.12 双方で解決可）。揮発サンドボックス前提で起動毎に `pip install -r requirements.txt --break-system-packages`。vendoring は `google-cloud-*` のバイナリ依存が重いため不採用。
+- **OneDrive 実行コピーへの同期**: 正は WSL リポジトリ。`scripts/sync-pc-cli-to-onedrive.sh` で `51.LINE投稿ボット/pc_cli/` へ rsync（`.env` / `secrets/` は同期せず秘密値を保護）。
+- 不要になった `ANTHROPIC_API_KEY` / `CLASSIFY_CONFIDENCE_THRESHOLD` を config / conftest から撤去。
+
+`requires-python` を 3.11 → 3.10 に引き下げ（サンドボックスが 3.10）。テストは 42 → 64 pass（mounts / winpath 一般化 / config の Windows パス解決・鍵正規化を追加）。

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import typer
 
-from app import config, folders, notion_writer, pull, sharepoint_writer, winpath
+from app import config, folders, notion_writer, pull, sharepoint_writer
 from app.config import settings
 
 app = typer.Typer(add_completion=False, help="LineTask pc_cli — GCS/Notion/SharePoint の薄い API ラッパー")
@@ -17,6 +17,7 @@ def _init_logging(log_run_id: str | None) -> str:
     config.setup_logging()
     run_id = log_run_id or f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     config.add_file_handler(run_id)
+    config.normalize_google_credentials()
     return run_id
 
 
@@ -60,7 +61,7 @@ def download_cmd(
     _emit({
         "doc_id": doc_id,
         "local_path_unix": unix,
-        "local_path_windows": winpath.unix_to_windows(unix),
+        "local_path_windows": config.to_windows(unix),
     })
 
 
@@ -156,7 +157,7 @@ def place_file_cmd(
     unix = str(dest)
     _emit({
         "destination_unix": unix,
-        "destination_windows": winpath.unix_to_windows(unix),
+        "destination_windows": config.to_windows(unix),
         "onedrive_link": sharepoint_writer.to_onedrive_link(dest),
         "created_subfolder": created,
     })
@@ -182,7 +183,7 @@ def write_log_cmd(
     unix = str(dest)
     _emit({
         "destination_unix": unix,
-        "destination_windows": winpath.unix_to_windows(unix),
+        "destination_windows": config.to_windows(unix),
         "created_subfolder": created,
     })
 
