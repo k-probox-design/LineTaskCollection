@@ -1,0 +1,213 @@
+import logging
+import threading
+import time
+from datetime import datetime, timedelta, timezone
+
+from notion_client import Client
+
+from app.config import settings
+
+logger = logging.getLogger("notion_writer")
+
+# 設計タスク管理 DB の既存プロパティ名。けいすけの実地確認で実際の名称と照合し、
+# 相違があればここだけ直せば済むように定数化している。
+PROP_TITLE = "タスク名"
+PROP_PRIORITY = "優先度"
+PROP_STATUS = "ステータス"
+PROP_ASSIGNEE = "担当"
+PROP_NOTE = "備考"
+PROP_ONEDRIVE = "OneDrive"
+PRIORITY_PENDING = "仕分け待ち"
+# 実 DB 確認(2026-05-30): 優先度 options = 仕分け待ち/すぐ/高/中/低/趣味（"通常" は無い）。
+# 完了化は優先度ではなく status 型プロパティ「ステータス」(完了/不要/レイアウト完了/…) で行う。
+
+# Notion API のレート制限(平均 3 req/sec)対策。連続呼び出しの間隔を最低 0.34 秒空ける。
+_MIN_INTERVAL = 0.34
+_last_call = 0.0
+_throttle_lock = threading.Lock()
+
+_client: Client | None = None
+_data_source_id: str | None = None
+
+
+def _throttle() -> None:
+    global _last_call
+    with _throttle_lock:
+        wait = _MIN_INTERVAL - (time.monotonic() - _last_call)
+        if wait > 0:
+            time.sleep(wait)
+        _last_call = time.monotonic()
+
+
+def _get_client() -> Client:
+    global _client
+    if _client is None:
+        _client = Client(auth=settings.notion_api_key)
+    return _client
+
+
+def _get_data_source_id() -> str:
+    """設計タスク管理 DB の data_source_id を解決してキャッシュする。
+
+    notion-client 3.x が既定で使う Notion-Version 2025-09-03 では、DB クエリと page 作成が
+    DB ではなく「データソース」単位になった（`databases.query` 廃止 → `data_sources.query`、
+    page parent は `database_id` → `data_source_id`）。
+
+    `NOTION_DATA_SOURCE_ID` が .env にあればそれを使う。無ければ `databases.retrieve` の
+    `data_sources[0]` を採る（当 DB は単一データソース前提。複数データソースを持つようになったら
+    この index 0 固定を見直すこと）。
+    """
+    global _data_source_id
+    if _data_source_id:
+        return _data_source_id
+
+    env_id = settings.notion_data_source_id
+    if env_id:
+        _data_source_id = env_id
+        return _data_source_id
+
+    _throttle()
+    db = _get_client().databases.retrieve(database_id=settings.notion_database_id_design_task)
+    sources = db.get("data_sources", [])
+    if not sources:
+        raise RuntimeError(
+            "設計タスク管理 DB に data_sources がありません（Notion-Version 2025-09-03 を期待）"
+        )
+    _data_source_id = sources[0]["id"]
+    logger.info("[NOTION] resolved data_source_id=%s (name=%s)", _data_source_id, sources[0].get("name"))
+    return _data_source_id
+
+
+def _title_text(page: dict) -> str:
+    title_prop = page.get("properties", {}).get(PROP_TITLE, {}).get("title", [])
+    return "".join(part.get("plain_text", "") for part in title_prop).strip()
+
+
+def _compose_note(case: str | None, note: str | None) -> str:
+    text = note or ""
+    if case:
+        text = f"案件: {case}\n{text}".strip()
+    return text
+
+
+def write_task(
+    case: str,
+    title: str,
+    priority: str | None = None,
+    note: str | None = None,
+    onedrive_link: str | None = None,
+    assignee_user_id: str | None = None,
+) -> dict:
+    """設計タスク管理 DB に row を新規作成。案件名は備考に記録する（案件プロパティは実 DB 未確認のため）。
+
+    priority 未指定なら既定（NOTION_DEFAULT_PRIORITY、既定値 "Claude追記"＝ボット起因の目印）。
+    担当(person)は assignee_user_id か NOTION_DEFAULT_ASSIGNEE_USER_ID をセット（人別ビューに乗せるため）。
+    どちらも無ければ担当を触らない（Notion 既定で作成者＝LineTaskBot になる）。
+    """
+    eff_priority = priority or settings.notion_default_priority
+    eff_assignee = assignee_user_id or settings.notion_default_assignee_user_id
+
+    properties: dict = {
+        PROP_TITLE: {"title": [{"text": {"content": title}}]},
+        PROP_PRIORITY: {"select": {"name": eff_priority}},
+    }
+    if eff_assignee:
+        properties[PROP_ASSIGNEE] = {"people": [{"object": "user", "id": eff_assignee}]}
+    note_text = _compose_note(case, note)
+    if note_text:
+        properties[PROP_NOTE] = {"rich_text": [{"text": {"content": note_text}}]}
+    if onedrive_link:
+        properties[PROP_ONEDRIVE] = {"url": onedrive_link}
+
+    _throttle()
+    page = _get_client().pages.create(
+        parent={"type": "data_source_id", "data_source_id": _get_data_source_id()},
+        properties=properties,
+    )
+    logger.info("[NOTION] created task '%s' (page=%s)", title, page["id"])
+    return {"page_id": page["id"], "url": page.get("url", "")}
+
+
+def update_task(
+    page_id: str,
+    case: str | None = None,
+    title: str | None = None,
+    priority: str | None = None,
+    note: str | None = None,
+    onedrive_link: str | None = None,
+    status: str | None = None,
+    assignee_user_id: str | None = None,
+) -> dict:
+    """既存 row を部分更新。指定したフィールドのみ更新する。完了化は status（ステータス）で。"""
+    properties: dict = {}
+    updated: list[str] = []
+
+    if title is not None:
+        properties[PROP_TITLE] = {"title": [{"text": {"content": title}}]}
+        updated.append("title")
+    if priority is not None:
+        properties[PROP_PRIORITY] = {"select": {"name": priority}}
+        updated.append("priority")
+    if status is not None:
+        properties[PROP_STATUS] = {"status": {"name": status}}
+        updated.append("status")
+    if assignee_user_id is not None:
+        properties[PROP_ASSIGNEE] = {"people": [{"object": "user", "id": assignee_user_id}]}
+        updated.append("assignee")
+    if case is not None or note is not None:
+        properties[PROP_NOTE] = {"rich_text": [{"text": {"content": _compose_note(case, note)}}]}
+        if case is not None:
+            updated.append("case")
+        if note is not None:
+            updated.append("note")
+    if onedrive_link is not None:
+        properties[PROP_ONEDRIVE] = {"url": onedrive_link}
+        updated.append("onedrive_link")
+
+    _throttle()
+    _get_client().pages.update(page_id=page_id, properties=properties)
+    logger.info("[NOTION] updated page %s fields=%s", page_id, updated)
+    return {"page_id": page_id, "updated_fields": updated}
+
+
+def list_cases(days: int = 90) -> list[dict]:
+    """直近 N 日に更新があったタスクから案件名候補を集約して返す。
+
+    案件名は現状タスク名（PROP_TITLE）を流用（実 DB の案件プロパティ名が未確認のため）。
+    同名タスクを 1 案件として件数・最終更新でまとめる。
+    """
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    query_filter = {"timestamp": "last_edited_time", "last_edited_time": {"on_or_after": since}}
+    data_source_id = _get_data_source_id()
+
+    agg: dict[str, dict] = {}
+    cursor: str | None = None
+    while True:
+        kwargs = {
+            "data_source_id": data_source_id,
+            "filter": query_filter,
+            "page_size": 100,
+        }
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        _throttle()
+        resp = _get_client().data_sources.query(**kwargs)
+
+        for page in resp.get("results", []):
+            case_name = _title_text(page)
+            if not case_name:
+                continue
+            last_edited = page.get("last_edited_time", "")
+            entry = agg.setdefault(case_name, {"case_name": case_name, "last_updated": last_edited, "task_count": 0})
+            entry["task_count"] += 1
+            if last_edited > entry["last_updated"]:
+                entry["last_updated"] = last_edited
+
+        if resp.get("has_more"):
+            cursor = resp.get("next_cursor")
+        else:
+            break
+
+    cases = sorted(agg.values(), key=lambda c: c["last_updated"], reverse=True)
+    logger.info("[NOTION] list_cases returned %d cases (days=%d)", len(cases), days)
+    return cases

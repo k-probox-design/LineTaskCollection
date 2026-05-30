@@ -207,6 +207,269 @@ gcloud auth application-default print-access-token
 
 ---
 
+## Phase C: Notion Integration「LineTaskBot」のセットアップ（けいすけ手作業）
+
+### Step 1: Integration「LineTaskBot」作成
+
+1. [Notion Integrations](https://www.notion.so/profile/integrations) を開く
+2. 「+ 新しいインテグレーション」をクリック
+3. 名前: **LineTaskBot**、関連付けるワークスペース: ビギン
+4. タイプ: 「内部インテグレーション」
+5. 「保存」→ 詳細画面で **「内部インテグレーションシークレット」をコピー**（`secret_xxxxx...` または `ntn_xxxxx...` 形式）
+6. シークレットは **後で `pc_worker/.env` に直接貼り付け**、チャットや受け渡しフォルダには貼らない（`NOTION_API_KEY`）
+
+### Step 2: 設計タスク管理 DB に LineTaskBot を招待
+
+1. Notion で「設計タスク管理」DB のページを開く
+2. 右上「…」→「接続」→ **LineTaskBot** を選択 →「確認」
+
+### Step 3: Database ID を控える
+
+1. DB ページの URL を開く（例: `https://www.notion.so/xxxxxxxx?v=yyyyyyy`）
+2. URL の `?v=` より前の 32 文字 hex が **Database ID**
+3. `pc_worker/.env` の `NOTION_DATABASE_ID_DESIGN_TASK` に貼り付け
+
+> **実地確認時の注意**: `pc_worker/app/notion_writer.py` 冒頭の `PROP_TITLE` / `PROP_PRIORITY` / `PROP_NOTE` / `PROP_ONEDRIVE` は設計タスク管理 DB の実際のプロパティ名を推定値で定義している。DB の実際のプロパティ名と相違があれば、この定数だけ修正する。
+
+---
+
+## Phase C: SharePoint 同期フォルダのルートパス確認（けいすけ手作業）
+
+PC の OneDrive 同期フォルダで、案件フォルダの**親ディレクトリ**のパスを確認する。例:
+
+```
+C:\Users\knaka\OneDrive - 株式会社ビギン\Documents\案件\
+└── コスモス ソラプロ\
+    ├── 09.受領資料\        ← 個別ファイルの格納先
+    └── 09.LINEやりとり資料\ ← 議事ログの格納先
+```
+
+上の例なら `C:\Users\knaka\OneDrive - 株式会社ビギン\Documents\案件\` を `pc_worker/.env` の `SHAREPOINT_ROOT` に貼り付ける（シークレットではないのでチャット共有可）。
+
+---
+
+## Phase C': pc_cli の使い方（Cowork 主導仕分け）
+
+Phase C' で仕分け判断は **Cowork（Opus）が担う**。pc_cli は GCS pull / Notion write / SharePoint write の**薄い API ラッパー**で、判定ロジックを持たない。Cowork が Skill 経由で各サブコマンドを bash で順序立てて呼ぶ。
+
+### セットアップ
+
+```bash
+cd pc_worker
+python -m venv .venv
+source .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+cp .env.example .env
+# NOTION_API_KEY / NOTION_DATABASE_ID_DESIGN_TASK / SHAREPOINT_ROOT / TMP_DOWNLOAD_DIR / LOG_OUTPUT_DIR を入力
+# GCP は ADC（gcloud auth application-default login）で解決。ANTHROPIC_API_KEY は不要（Cowork が判定）
+```
+
+### 起動
+
+```bash
+python -m app.cli <subcommand> [options]
+```
+
+stdout は結果 JSON のみ、ログは stderr（+ `LOG_OUTPUT_DIR` ファイル）に出る。エラー時は exit code != 0 で stderr に `{"error": "...", "detail": "..."}`。
+
+### サブコマンド一覧（11 個）
+
+| サブコマンド | 役割 |
+|------------|------|
+| `pull-pending [--limit=50]` | Firestore status=pending をメタのみ JSON 配列で出力（GCS は触らない）|
+| `download <doc_id> [--dest-dir]` | GCS バイナリを DL、unix/windows 両形式のパスを返す |
+| `list-cases [--days=90]` | Notion から直近 N 日更新の案件名候補を出力 |
+| `list-case-folders [--root] [--max-depth=3] [--query <名前片>]` | 配下を再帰スキャン。`--root`/`--query` 可（`--root` は Windows パス可）。**2 段スコープ推奨**: `--max-depth 1` でブランチ列挙→`--root <branch> --query <案件>`（@@@ 全走査はマウントが遅く非推奨）|
+| `list-messages --group-id [--around-doc \| --since --until] [--window-hours=48] [--limit=200]` | 同一グループの前後メッセージを時系列で返す（議事ログ素材。関連判断は Cowork）|
+| `write-task --case --title [--priority] [--note] [--onedrive-link] [--assignee-user-id]` | Notion 新規 row。既定優先度 `Claude追記`（`NOTION_DEFAULT_PRIORITY`）、担当に `NOTION_DEFAULT_ASSIGNEE_USER_ID` をセット（人別ビュー対応）|
+| `update-task --page-id [--case --title --priority --status --note --onedrive-link --assignee-user-id]` | Notion 部分更新。**完了化は `--status 完了`（status 型「ステータス」）**。優先度に "通常" は無い |
+| `place-file --src --case-folder --title [--date]` | 案件フォルダ配下の 09.LINEやりとり資料/ に配置。`--case-folder`/`--src` は Windows パス可（実行時に実マウントへ解決、bug1）|
+| `write-log --case-folder --date --content [--filename]` | 議事ログを 09.LINEやりとり資料/ に書き込み（上書き、`--content -` で stdin）。既定名 `<date> 議事ログ.md`、`--filename` で HTML 等の任意名 |
+| `mark-done <doc_id>` | Firestore done + GCS 削除 |
+| `mark-review <doc_id> [--reason]` | Firestore needs_review、GCS 保持 |
+
+全サブコマンドに `--log-run-id=<外部ID>` オプションがあり、Cowork 側から共通 run_id を渡して同一仕分けセッションのログを束ねられる。
+
+**Notion 優先度/ステータス/担当（実 DB 確認 2026-05-30）**: 優先度 select の option は `Claude追記 / 仕分け待ち / すぐ / 高 / 中 / 低 / 趣味`（**"通常" は存在しない**）。`Claude追記`（紫）はボット起因の目印で write-task の既定。`担当`(person 型) に既定ユーザー（`NOTION_DEFAULT_ASSIGNEE_USER_ID`、けいすけ）をセットして人別ビューに乗せる（未設定だと作成者＝LineTaskBot になり人別グループから外れる）。仕分け完了の表現は優先度ではなく status 型プロパティ **`ステータス`**（`完了 / 不要 / レイアウト完了 / 進行中 / …`、既定 `未着手`）で行う。完了時は `update-task --status <値>`。完了化を優先度（Claude追記→本来値）で管理するか status で管理するかはけいすけ宿題（未確定）。
+
+**送信者（Phase B 拡張 2026-05-30）**: `list-messages` / `pull-pending` は受信側が保存していれば `sender_user_id` / `sender_display_name` を返す。Cloud Run 受信側がこの対応を入れた後に受信したメッセージのみ保持（過去分は遡及不可）。Cowork は議事ログの発言者表示に使う。
+
+LINE 由来資料（画像/PDF/議事ログ）は案件フォルダ配下の **`09.LINEやりとり資料/` に統一**して格納する（`09.受領資料` は使わない）。`09.LINEやりとり資料/` は存在しなければ pc_cli が自動作成（案件フォルダ自体の自動作成はしない）。
+
+### 実行例とサンプル出力
+
+```bash
+# 1) 未処理を取得
+$ python -m app.cli pull-pending --limit 50
+[{"doc_id":"abc123","type":"image","group_id":"Cxxx","timestamp":"2026-05-29T08:23:45+09:00","gcs_path":"gs://.../abc123.jpg"}]
+
+# 2) バイナリを DL（Cowork が Read tool で読む）
+$ python -m app.cli download abc123 --dest-dir "/mnt/c/.../pc_worker_tmp"
+{"doc_id":"abc123","local_path_unix":"/mnt/c/.../abc123.jpg","local_path_windows":"C:\\...\\abc123.jpg"}
+
+# 3) 案件フォルダ候補をスキャン → Cowork が案件名と fuzzy match
+$ python -m app.cli list-case-folders --max-depth 3
+[{"folder_name":"00.HESTA_..._様","parent_folder_name":"@@@決定案件","depth":2,"absolute_path_unix":"/mnt/c/.../@@@/@@@決定案件/00.HESTA_..._様","absolute_path_windows":"C:\\...","child_dir_count":18,"has_line_yaritori_folder":true,"last_modified":"2026-05-25T01:53:00+09:00"}]
+
+# 4) Notion にタスク追加
+$ python -m app.cli write-task --case "佐藤邸新築" --title "【LINE】2026-05-29 概算見積" --note "確信度 0.92"
+{"page_id":"page-xxxxx","url":"https://www.notion.so/..."}
+
+# 5) SharePoint 格納（案件フォルダ絶対パス指定）→ 完了化 → GCS 削除
+$ python -m app.cli place-file --src "/mnt/c/.../abc123.pdf" --case-folder "/mnt/c/.../@@@決定案件/00.HESTA_..._様" --title "概算見積"
+{"destination_unix":"/mnt/c/.../09.LINEやりとり資料/2026-05-29 概算見積.pdf","destination_windows":"C:\\...","onedrive_link":null,"created_subfolder":false}
+$ python -m app.cli update-task --page-id page-xxxxx --status 完了 --onedrive-link "C:\\..."   # 完了化は status で（"通常" 優先度は無い）
+$ python -m app.cli mark-done abc123
+{"doc_id":"abc123","status":"done","gcs_deleted":true}
+```
+
+### SharePoint フォルダ構造の探索
+
+`SHAREPOINT_ROOT`（`/mnt/c/Users/.../@@@`）配下は階層・命名が不規則（ステータスフォルダ配下の案件 / 直接案件 / 年フォルダ経由の 3 階層 / 非案件フォルダ混在）。固定パスを組み立てず、`list-case-folders` で候補を取得して Cowork が案件名と突合し、得た **絶対パス**を `place-file --case-folder` / `write-log --case-folder` に渡す。
+
+出力の読み方:
+- `depth` / `parent_folder_name`: ステータスフォルダ配下か直接案件かの判別
+- `child_dir_count`: 多ければ集合フォルダ（年フォルダやステータスフォルダ）の可能性。少なければ単一案件
+- `has_line_yaritori_folder`: 既に `09.LINEやりとり資料/` があるか（初回かどうか）
+- `last_modified`: 最近触られた = アクティブ案件のヒント
+
+マッチする案件フォルダが無ければ Cowork は `mark-review <doc_id> --reason ...` で needs_review に振り分け、けいすけが手動でフォルダ作成 → 再仕分けする。
+
+### Cowork からの呼び出し例（bash 経由）
+
+Cowork Skill は同一セッションの全 pc_cli 呼び出しに共通 run_id を渡してログを束ねる:
+
+```bash
+RUN_ID="$(date +%Y%m%d-%H%M%S)-cowork"
+cd ~/projects/LineTaskCollection/pc_worker && source .venv/bin/activate
+
+# 未処理一覧を取得 → Cowork がマルチモーダル判定 → 各 item を順に処理
+python -m app.cli pull-pending --limit 50 --log-run-id "$RUN_ID"
+python -m app.cli download abc123 --log-run-id "$RUN_ID"          # Cowork が画像/PDF を Read
+python -m app.cli list-cases --log-run-id "$RUN_ID"               # Notion 案件候補
+python -m app.cli list-case-folders --log-run-id "$RUN_ID"        # SharePoint 案件フォルダ候補 → 絶対パスを得る
+python -m app.cli write-task --case "佐藤邸新築" --title "..." --log-run-id "$RUN_ID"
+python -m app.cli place-file --src "..." --case-folder "/mnt/c/.../@@@決定案件/00.HESTA_..._様" --title "概算見積" --log-run-id "$RUN_ID"
+python -m app.cli mark-done abc123 --log-run-id "$RUN_ID"
+```
+
+確信度が低い／案件不明なものは Cowork がけいすけにその場で対話確認するか、`mark-review <doc_id> --reason ...` で needs_review に残す。
+
+### テスト
+
+```bash
+pytest tests/ -v
+```
+
+外部 API（GCS / Firestore / Notion）はすべてモック。
+
+### 実行環境（2026-05-29 A 方針 → 2026-05-30 実行経路 A 案で上書き）
+
+> 2026-05-29 の A 方針（pc_cli は WSL でのみ実行、Cowork は監査のみ）は、2026-05-30 に Cowork の実行環境を実機確認した結果見直した。Cowork の bash は WSL ではなく**独立した Linux サンドボックス**で、マウントされるのは OneDrive の選択フォルダのみ・WSL リポジトリには到達不可だった。そこで pc_cli を**サンドボックスからも実行できる形**にし、仕分けをサンドボックス内で完結させる「実行経路 A 案」に確定。下記「Cowork サンドボックスからの実行」が現行手順。WSL 実行は引き続き開発・ローカルテスト用として有効。
+
+開発の「正」は WSL リポジトリ `pc_worker/`。Cowork から実行するための複製を `scripts/sync-pc-cli-to-onedrive.sh` で OneDrive `51.LINE投稿ボット/pc_cli/` に同期する（`.env` / `secrets/` は同期せず、けいすけが置いた秘密値を保護）。
+
+---
+
+## Phase C': Cowork サンドボックスからの実行（2026-05-30 確定、実行経路 A 案）
+
+Cowork の bash は **Ubuntu 22 / Python 3.10 の揮発サンドボックス**。マウントは OneDrive の選択フォルダのみ（`/sessions/<動的セッション名>/mnt/<フォルダ名>/`、セッション名は実行毎に変わる）。ネットワークは開いている（Firestore / Notion / pypi 到達可）。この前提で pc_cli を完動させる。
+
+### ① ブートストラップ（git clone を正とする、起動毎）
+
+**コードは OneDrive コピーから読まない**。OneDrive Files-On-Demand のプレースホルダは Cowork の Linux マウント越しに中身が途中で切れて読めず（2026-05-30 実測、`attrib +P` でも安定解消せず）、無人スケジュール実行では Windows Read で補正もできない。よって **コードは GitHub から git clone** してサンドボックスのネイティブ fs（`/outputs`）で実行する。OneDrive からは小サイズで完全に読める `.env` と SA 鍵だけを使う。
+
+`scripts/sandbox-bootstrap.sh` が clone→`.env` コピー→`pip install`→AST 検証まで行う。Skill 先頭での呼び出しは `docs/cowork-skill-reference.md` §6-1 を参照。要旨:
+
+```bash
+ONEDRIVE=$(ls -d /sessions/*/mnt/51.LINE投稿ボット/pc_cli | head -1)
+export GITHUB_PAT=$(grep -E '^GITHUB_PAT=' "$ONEDRIVE/.env" | head -1 | cut -d= -f2- | tr -d '\r')
+export REPO_REF=main
+curl -fsSL -H "Authorization: token $GITHUB_PAT" \
+  "https://raw.githubusercontent.com/k-probox-design/LineTaskCollection/$REPO_REF/scripts/sandbox-bootstrap.sh" -o /tmp/b.sh
+PCWORKER=$(bash /tmp/b.sh | sed -n 's/^PCWORKER=//p' | tail -1)   # stdout 1 行 = ユニークな pc_worker 絶対パス
+trap 'rm -rf "$(dirname "$PCWORKER")" 2>/dev/null || true' EXIT    # 自分が作った dir を終了時に best-effort 削除
+cd "$PCWORKER" && export PYTHONPATH="$PWD"
+```
+
+clone 先は**ネイティブ fs 必須**で、bootstrap が**実行ごとにユニークな `mktemp -d /tmp/linetask.XXXXXX`** を作る（スケジュール実行は前回と別ユーザーで走るため固定パスだと前回分を消せず詰まる）。OneDrive マウントや `/outputs` 直下では git の内部操作が失敗する（2026-05-30 実測）。bootstrap は stdout に `PCWORKER=<path>` の 1 行だけを出し（人間向けログは stderr）、後片付け（自分の dir 削除）は呼び出し側の責務。依存はバイナリ wheel を含む `google-cloud-*` があるため vendoring せず **毎回 pip**（実測 約6秒、2026-05-30）。`/tmp` から動かしても `mounts.py` の glob フォールバックで `@@@`/winpath は解決される。
+
+### ② 認証（GCP サービスアカウント鍵）
+
+サンドボックスには ADC が無いため **SA 鍵ファイル**で認証する。`.env` の `GOOGLE_APPLICATION_CREDENTIALS` に鍵 JSON のパス（Windows 形式可）を書くと、pc_cli が実行時に実マウントへ解決して `google-cloud` ライブラリに渡す。鍵 JSON は `51.LINE投稿ボット/secrets/`（同期・コミット対象外）に置く。鍵の作成・IAM 付与はけいすけ手作業（SA 名 `linetask-puller`、`roles/datastore.user` ＋バケットに `roles/storage.objectAdmin`）。
+
+### ③ 動的マウントパスの実行時解決（最重要）
+
+`.env` のパス系（`SHAREPOINT_ROOT` / `TMP_DOWNLOAD_DIR` / `LOG_OUTPUT_DIR` / `GOOGLE_APPLICATION_CREDENTIALS`）は**静的な Windows 絶対パス**で書く。pc_cli が実行時に実マウント先へ解決するため、Skill 側でセッション名を注入する必要はない（動的解決の責務は pc_cli 側）。
+
+解決の鍵が `MOUNT_MAP`: Cowork にマウントしている Windows フォルダの絶対パスを `;` 区切りで列挙すると、pc_cli が以下の順で実マウント unix パスを特定する:
+
+1. pc_cli 自身の位置（`/sessions/<現セッション>/mnt/...` 配下）から現セッションの mnt ベースを割り出し `<base>/<フォルダ名>` を確認
+2. WSL の `/mnt/<drive>/...`
+3. `/sessions/*/mnt/<フォルダ名>` の glob
+
+特定した (unix 接頭辞 ↔ windows 接頭辞) の写像で、`destination_windows` 等の出力を正しい `C:\...` 形へ戻す（winpath 一般化）。詳細仕様は `docs/cowork-skill-reference.md`「マウント解決と winpath 一般化」。
+
+### ④ .env の用意（けいすけ手作業）
+
+`pc_cli/.env.sandbox.example`（既知値記入済み）を OneDrive `pc_cli/.env` にコピーし、けいすけが下記 3 点を行えば動く（`NOTION_DATABASE_ID_DESIGN_TASK` / `GCS_BUCKET` / `FIRESTORE_PROJECT` / `NOTION_DATA_SOURCE_ID` / `MOUNT_MAP` / パス系は記入済み）:
+
+1. `NOTION_API_KEY` を記入
+2. `secrets/linetask-puller.json` に GCP SA 鍵を配置（`GOOGLE_APPLICATION_CREDENTIALS` は記入済み）
+3. **`GITHUB_PAT` を記入** — GitHub fine-grained PAT（対象 repo = `k-probox-design/LineTaskCollection` のみ、権限 = Contents:Read のみ、有効期限は任意）。サンドボックスが git clone でコードを取得するために使う。作成は GitHub → Settings → Developer settings → Fine-grained tokens。
+
+`.env` は OneDrive 配下にあり小サイズなのでマウント越しに完全に読める（コード本体と違いハイドレート問題は起きない）。
+
+---
+
+## Phase C': 実行ログの OneDrive 複製設定
+
+各 pc_cli 実行のログ（どの item をどう処理したか・エラー）を Cowork が OneDrive 経由で監査できるよう、stderr ログを OneDrive 配下にも複製出力する。
+
+- `.env` の `LOG_OUTPUT_DIR` に出力先を指定すると、`$LOG_OUTPUT_DIR/YYYY-MM-DD/<run_id>.jsonl` に JSON Lines 形式で複製される（コンソール=stderr 出力は維持、ファイルは追加）
+- `<run_id>` はサブコマンド呼び出しごとに発行（`YYYYMMDD-HHMMSS-<6桁>`）。`--log-run-id` で Cowork 側から共通 ID を渡せる
+- 日付フォルダはランタイムで自動作成
+
+### LOG_OUTPUT_DIR の値の決め方
+
+Cowork が読める OneDrive 同期フォルダ内のパスを `/mnt/c/...` 形式で指定する。例:
+
+```
+LOG_OUTPUT_DIR=/mnt/c/Users/knaka/OneDrive - 株式会社ビギン/@@設計/51.LINE投稿ボット/pc_worker_logs
+```
+
+### フォールバック挙動
+
+ログ複製は「あれば便利」な監査補助であり、本処理を止めない設計:
+
+- `LOG_OUTPUT_DIR` 未設定 → ファイル出力ハンドラを登録せず、コンソールのみ。WARN を 1 行出して継続
+- パスが存在しない / 書き込めない → 同様にスキップして WARN、本処理は継続
+
+---
+
+## Phase C: GCS ライフサイクルルール設定（けいすけ手作業 / Cloud Shell）
+
+仕分け取り残しの保険として、90 日経過の `pending/` オブジェクトを自動削除する。
+
+```bash
+cat > /tmp/lifecycle.json <<'EOF'
+{
+  "lifecycle": {
+    "rule": [
+      {
+        "action": {"type": "Delete"},
+        "condition": {"age": 90, "matchesPrefix": ["pending/"]}
+      }
+    ]
+  }
+}
+EOF
+gcloud storage buckets update gs://probox-linetask-prod-intake --lifecycle-file=/tmp/lifecycle.json
+rm /tmp/lifecycle.json
+```
+
+---
+
 ## トラブルシュート
 
 ### ボットを招待した直後にグループから退出する

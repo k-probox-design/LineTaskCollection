@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "linetask-pc-worker"
+version = "0.1.0"
+# Cowork サンドボックスが Python 3.10 のため 3.10 を下限にする（CLAUDE.md / docs 参照）
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.12",
+    "notion-client>=2.2",
+    "google-cloud-storage>=2.18",
+    "google-cloud-firestore>=2.20",
+    "python-dotenv>=1.0",
+    "python-json-logger>=2.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.14",
+]

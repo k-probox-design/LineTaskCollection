@@ -1,0 +1,11 @@
+# pc_cli ランタイム依存（バージョン固定）。
+# Cowork サンドボックス（Ubuntu 22 / Python 3.10）で揮発するたびに
+#   pip install -r requirements.txt --break-system-packages
+# で入れ直す前提。ここで固定したバージョンは Python 3.10 / 3.12 双方で解決可能。
+# 直接依存のみピン留めし、transitive は pip の解決に委ねる（3.10 での過剰制約を避ける）。
+typer==0.26.3
+notion-client==3.1.0
+google-cloud-storage==3.10.1
+google-cloud-firestore==2.27.0
+python-dotenv==1.2.2
+python-json-logger==4.1.0

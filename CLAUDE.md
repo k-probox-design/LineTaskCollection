@@ -311,7 +311,7 @@ spec §7 を踏襲。各 Phase の完了基準は着手時に Cowork と確定�
 |-------|------|------|
 | Phase A | LINE 公式アカウント作成 + 受信疎通(ngrok 等で `[JOIN]`/ファイル受信を確認) | **完走(2026-05-28)** |
 | Phase B | Cloud Run 受信サーバー(GCS + Firestore 書き込み)を常時起動に | **完走(2026-05-28)** |
-| Phase C | PC 側処理(Cowork 実行)— pull → Claude 仕分け → SharePoint 格納 → Notion 記録 | 未着手 |
+| Phase C | PC 側処理(Cowork 実行)— pull → Claude 仕分け → SharePoint 格納 → Notion 記録 | **Phase C' に転換、再構築中(2026-05-29)** |
 | Phase D | Cowork 用アーカイブ検索ヘルパー(Skill)を整備 | 未着手 |
 
 ---
@@ -442,6 +442,75 @@ Cowork 判断で確定した「以後の実装で従うルール」をここに�
 - 理由: LINE Webhook の取りこぼし防止。月額 ¥1,000〜2,000 程度の上振れは業務影響と引き換えに許容
 - 月額が想定を超えた場合の見直しトリガー: GCP Budget Alert を別途設定(けいすけ手作業、未実施)
 
+### Phase C 実装方針(2026-05-28 確定 — ★ 2026-05-29 に Phase C' へ転換、下記方針で上書き)
+
+> 以下 18 項目は API 案前提。仕分けを Cowork 主導に転換したため取り消し線扱い。データ設計(Notion DB/プロパティ、SharePoint パス、Firestore 遷移)は Phase C' でも踏襲する。
+
+#### Notion 連携
+
+1. **既存 DB「設計タスク管理」を活用**、新規 DB を作らない、新規フィールドも追加しない
+2. **既存「仕分け待ち」優先度タグを使用**(LINE 受信ファイルは全件これで投入)
+3. **専用 Integration「LineTaskBot」を新規作成**、けいすけ手動で設計タスク管理 DB に招待
+4. **作成者フィールドが LineTaskBot になることでけいすけ手動投入と区別**
+
+#### Notion タスクの粒度
+
+5. **1 ファイル = 1 タスク**(複数ファイル同時受信時は連投をメタで紐付け、集約はけいすけ手動)
+
+#### Notion タスク命名
+
+6. **タスク名: `【LINE】YYYY-MM-DD Claude推測タイトル`**
+7. **タイトル: Claude が完全自動推測**(ファイル内容＋直近の text メッセージ＋ファイル名から)
+8. **備考フィールドに Claude 推測詳細**(案件候補・確信度・判断理由・同 groupId 内の関連メッセージ ID)
+
+#### SharePoint 保存先
+
+9. **個別ファイル**: `案件名/09.受領資料/YYYY-MM-DD タイトル.<ext>`
+10. **議事ログ**: `案件名/09.LINEやりとり資料/YYYY-MM-DD 議事ログ.md`
+11. **09 番号は意図的に既存「09.受領資料」と並列、両方 09**
+12. **議事ログ Markdown**: テキスト＋画像リンク(個別ファイルへの相対パス)が時系列に並ぶ形式
+13. **書き込み手段**: PC の OneDrive 同期フォルダへのファイル書き込みのみ(Microsoft Graph API 不使用、Azure 登録不要)
+
+#### ステージング・削除
+
+14. **GCS pending/ は仕分け確定まで保持**、SharePoint 移動後に GCS から削除
+15. **GCS ライフサイクル**: 90 日経過の pending/ オブジェクト自動削除(保険)
+16. **Firestore `intake_messages.status` は pending → done に更新**、ドキュメントは削除しない(アーカイブ)
+
+#### Cowork 許可フォルダ
+
+17. ~~**`C:\Users\knaka\OneDrive - 株式会社ビギン\@@設計\51.LINE投稿ボット\pc_worker\`** に PC 側スクリプトと `.env` を配置~~ → **2026-05-29 A 方針で上書き(下記)**
+18. ~~リポジトリの `pc_worker/` 配下を上記パスにコピーして運用~~ → **2026-05-29 A 方針で上書き(下記)**
+
+### Phase C 実行環境(2026-05-29 確定、A 方針 — 項目 17/18 を上書き)
+
+- pc_worker は **WSL2 リポジトリ内で開発・実行**(OneDrive へのコピー配置=B-2 案は不採用、二重管理の運用負債を避ける)
+- `.env` も WSL 側 `pc_worker/.env` のみ。SharePoint 書き込みは WSL から `/mnt/c/.../OneDrive/...` 経由で同期に委ねる
+- Cowork はコード・`.env`・実行コンソールに直接アクセスできないため、監査経路を 2 点で代替:
+  1. `pc_worker/.env.example` を `Coworkとの受け渡し/` に複製(実値は共有しない)
+  2. 実行ログを `$LOG_OUTPUT_DIR/YYYY-MM-DD/<run_id>.jsonl`(OneDrive 配下)に JSON Lines 複製。未設定・書込不可時は WARN でスキップし本処理は継続
+
+### Phase C' 実装方針(2026-05-29 確定 — 仕分けを Cowork 主導に転換)
+
+- **仕分け判断は Cowork(Opus, claude-opus-4-7)が担う**。pc_worker は判定ロジックを持たない薄い CLI **pc_cli** に再構築
+- 転換理由: コスト(API 月 ¥1,000〜3,000 → ¥0)/ 精度(sonnet-4-6 → opus-4-7)/ 確信度低をその場で対話確認 / Phase D 連続性 / `ANTHROPIC_API_KEY` 不要
+- **pc_cli**(`python -m app.cli <subcommand>`): pull-pending / download / list-cases / write-task / update-task / place-file / write-log / mark-done / mark-review の 9 サブコマンド。stdout=結果 JSON、stderr=ログ
+- **削除**: classify.py / orchestrator.py / main.py(判定ロジックは `docs/cowork-skill-reference.md` に退避し Cowork Skill へ移植)
+- 起動運用: スケジュールタスク 4 回/日(朝 9・昼 13・夕 18・夜 21)で Cowork 自動起動(Cowork 側で設定、pc_cli は関与しない)
+- データ設計(Notion DB「設計タスク管理」/「仕分け待ち」優先度 / Firestore status 遷移)は Phase C の確定事項を踏襲
+- **SHAREPOINT_ROOT 配下は階層・命名が不規則**(ステータスフォルダ配下案件 / 直接案件 / 非案件 / 2〜3 階層混在)。固定パスを組み立てず、`list-case-folders` で候補を再帰スキャン → Cowork が案件名と突合 → 得た**絶対パス**を `place-file --case-folder` / `write-log --case-folder` に渡す。LINE 由来資料は `<案件フォルダ>/09.LINEやりとり資料/` に統一格納(サブフォルダ自動作成 OK、案件フォルダ自体の自動作成は NG=needs_review 運用)
+
+### Phase C' 実行経路(2026-05-30 確定、A 案 — 2026-05-29 A 方針を上書き)
+
+Cowork の bash は **WSL ではなく独立した Linux サンドボックス**(Ubuntu 22 / Python 3.10)。マウントは OneDrive の選択フォルダのみ(`/sessions/<動的セッション名>/mnt/<フォルダ名>/`、セッション名は実行毎に変わる)、WSL リポジトリには未到達、ネットワークは開。よって仕分けは **Cowork サンドボックス内で完結**させる(B 案=Cloud Run に HTTP API は不採用)。
+
+- **動的マウントパスの解決は pc_cli 側の責務**。`.env` の `MOUNT_MAP`(Windows 絶対パスの `;` 列挙)から、pc_cli が実行時に実マウント先を特定(①自身の位置から現セッション mnt ベース→②WSL `/mnt/c`→③`/sessions/*/mnt` glob)。Skill はセッション名を注入しない
+- **winpath 一般化**: (unix↔windows) 写像を最長一致適用、`/mnt/<drive>` をフォールバック。`destination_windows` 等が `/sessions/<動的>/mnt/@@@/...` でも `C:\...\@@@\...` に戻る
+- **パス系 .env(SHAREPOINT_ROOT / TMP_DOWNLOAD_DIR / LOG_OUTPUT_DIR / GOOGLE_APPLICATION_CREDENTIALS)は Windows パスでも unix パスでも記述可**(Windows 形式なら実行時 unix 解決、WSL 開発は従来の `/mnt/c` 値で後方互換)
+- **GCP 認証は SA 鍵ファイル + ADC 両対応**(サンドボックスは鍵、WSL は ADC)。鍵 JSON は `51.LINE投稿ボット/secrets/`(同期・コミット対象外)
+- **正は WSL リポジトリ。OneDrive 実行コピーは `scripts/sync-pc-cli-to-onedrive.sh` で同期**(`.env` / `secrets/` は同期せず秘密値保護)。依存は `requirements.txt` 固定、揮発サンドボックスで起動毎に `pip install --break-system-packages`
+- **サンドボックスへのコード配布は git clone を正とする(2026-05-30)**。OneDrive Files-On-Demand のプレースホルダは Cowork の Linux マウント越しに中身が途中で切れて読めず、`attrib +P` でも安定解消しないため。`scripts/sandbox-bootstrap.sh` が GitHub private repo を**ネイティブ fs の実行ごとユニーク dir(`mktemp -d /tmp/linetask.XXXXXX`)**に clone→`.env` コピー→pip→AST 検証。OneDrive マウントや `/outputs` 直下は git 内部操作が失敗するため clone 先はネイティブ fs 必須。スケジュール実行は前回と別ユーザーで走るため固定パス不可(rm -rf 不能)＝ユニーク化必須。bootstrap は stdout に `PCWORKER=<path>` 1 行のみ出力(ログは stderr)、後片付けは呼び出し側(Skill)が `trap EXIT` で。OneDrive からは小サイズで完全に読める `.env`・SA 鍵のみ使用。clone 用に `GITHUB_PAT`(Contents:Read のみの fine-grained PAT)を OneDrive `.env` に置く。検証は Windows 側 size でなく「サンドボックスが読むバイト列」で AST parse する
+
 > 新しい決定をしたら、その都度ここを更新する。
 
 ---
@@ -451,6 +520,12 @@ Cowork 判断で確定した「以後の実装で従うルール」をここに�
 実装・運用で踏んだ罠と回避策を積み上げていくセクション。本セクションは空のまま開始、Phase A 着手後に蓄積する。
 
 ProboxDesign で実証済みの汎用教訓(autonomous 連続完走の規模圧縮要因 / 3 役運用 / 受け渡しフォルダ運用)はそのまま継承する。
+
+### Cowork サンドボックスの動的マウント(2026-05-30)
+
+- Cowork の bash は WSL ではなく**揮発する独立 Linux サンドボックス**。OneDrive 選択フォルダが `/sessions/<動的セッション名>/mnt/<フォルダ名>/` にマウントされ、**セッション名は実行毎に変わる**ので固定値に依存してはいけない。
+- 回避策: 実行コードは**自分自身の `__file__` パス**から現セッションの mnt ベースを割り出せる(`/sessions/<x>/mnt/...` 配下で動いているため)。これでセッション名注入なしに動的解決できる。glob `/sessions/*/mnt/<名>` は複数セッション残存時に誤るのでフォールバック扱い。
+- マウントのフォルダ名(末尾要素)から Windows 親パスは導けない(`@@@`→`...\@@@` だが `51.LINE投稿ボット`→`...\@@設計\51.LINE投稿ボット`)。Windows 側絶対パスは明示設定(`MOUNT_MAP`)が必要。
 
 ---
 
