@@ -210,8 +210,8 @@ Notion 修正の再スモークで、OneDrive 実行コピー `51.LINE投稿ボ�
 
 ### 決定（候補 a/b/c から b を採用）
 
-- **(b) git clone を本番の正**: Cowork サンドボックスはコードを GitHub private repo から git clone してネイティブ fs `/outputs/linetask` で実行する。OneDrive プレースホルダ依存を断つ。`scripts/sandbox-bootstrap.sh`（clone→`.env` コピー→pip→**AST 検証**）を新設し、Skill は PAT 付き curl で取得して実行。
-- OneDrive からは「小サイズで完全に読める」`.env`（PAT/Notion 鍵等）と SA 鍵だけを読む。`GOOGLE_APPLICATION_CREDENTIALS` は Windows パスのまま、`mounts.py` の `/sessions/*/mnt` glob フォールバックで実マウントへ解決（`/outputs` から動かしても機能、テスト追加で担保）。
+- **(b) git clone を本番の正**: Cowork サンドボックスはコードを GitHub private repo から git clone してネイティブ fs（`/tmp/linetask`）で実行する。OneDrive プレースホルダ依存を断つ。`scripts/sandbox-bootstrap.sh`（clone→`.env` コピー→pip→**AST 検証**）を新設し、Skill は PAT 付き curl で取得して実行。
+- OneDrive からは「小サイズで完全に読める」`.env`（PAT/Notion 鍵等）と SA 鍵だけを読む。`GOOGLE_APPLICATION_CREDENTIALS` は Windows パスのまま、`mounts.py` の `/sessions/*/mnt` glob フォールバックで実マウントへ解決（`/tmp` から動かしても機能、テスト追加で担保）。
 - 検証方法の是正: Windows 側 size ではなく **「サンドボックスが実際に読むバイト列」で AST parse**（bootstrap と smoke 手順 0a）。
 - (a) 強制ハイドレート（`/mnt/c` 越し全 `.py` read→pin）は `sync-pc-cli-to-onedrive.sh` に**補助として残す**が、Cowork マウント追随は保証外。OneDrive コピーの役割は「WSL 開発／git 不達フォールバック／`.env.sandbox.example` 配布」に降格。
 - (c) FoD 外配置は Cowork が OneDrive 選択フォルダしかマウントできず不成立。
@@ -220,4 +220,6 @@ Notion 修正の再スモークで、OneDrive 実行コピー `51.LINE投稿ボ�
 
 - GitHub fine-grained PAT（対象 repo = 当 repo のみ、Contents:Read のみ）を発行し、OneDrive `pc_cli/.env` の `GITHUB_PAT=` に記入。
 
-テストは 66 → 67 pass（`/outputs` 実行＝session 外での glob フォールバック解決を追加）。
+テストは 66 → 67 pass（ネイティブ fs 実行＝session 外での glob フォールバック解決を追加）。
+
+> 追補（2026-05-30）: 当初 clone 先を `/outputs/linetask` としていたが、Cowork 実機で `/outputs` 直下は書込不可、OneDrive マウント実体（`/sessions/<sess>/mnt/outputs`）は `.git/config.lock` の unlink 非対応で clone が失敗すると判明。**clone 先を `/tmp/linetask`（ネイティブ fs）既定に修正**。git の実体は mount を避けネイティブ fs に置く。`.env`/SA 鍵は従来どおり OneDrive マウントから読む。git 経路の実機スモークは green（list-cases 199 案件 / write-task→archive / AST 全 10 完全）。

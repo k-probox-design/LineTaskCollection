@@ -383,10 +383,10 @@ export REPO_REF=main
 curl -fsSL -H "Authorization: token $GITHUB_PAT" \
   "https://raw.githubusercontent.com/k-probox-design/LineTaskCollection/$REPO_REF/scripts/sandbox-bootstrap.sh" -o /tmp/b.sh
 bash /tmp/b.sh
-cd /outputs/linetask/pc_worker && export PYTHONPATH="$PWD"
+cd /tmp/linetask/pc_worker && export PYTHONPATH="$PWD"
 ```
 
-依存はバイナリ wheel を含む `google-cloud-*` があるため vendoring せず **毎回 pip**（実測 約6秒、2026-05-30）。`/outputs` から動かしても `mounts.py` の glob フォールバックで `@@@`/winpath は解決される。
+clone 先は**ネイティブ fs（既定 `/tmp/linetask`）必須**。OneDrive マウントや `/outputs` 直下では git の内部操作が失敗する（2026-05-30 実測）。依存はバイナリ wheel を含む `google-cloud-*` があるため vendoring せず **毎回 pip**（実測 約6秒、2026-05-30）。`/tmp` から動かしても `mounts.py` の glob フォールバックで `@@@`/winpath は解決される。
 
 ### ② 認証（GCP サービスアカウント鍵）
 

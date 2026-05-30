@@ -166,18 +166,19 @@ export REPO_REF=main          # main マージ前のテストは work ブラン�
 curl -fsSL -H "Authorization: token $GITHUB_PAT" \
   "https://raw.githubusercontent.com/k-probox-design/LineTaskCollection/$REPO_REF/scripts/sandbox-bootstrap.sh" \
   -o /tmp/sandbox-bootstrap.sh
-bash /tmp/sandbox-bootstrap.sh
+bash /tmp/sandbox-bootstrap.sh        # 既定 WORK_DIR=/tmp/linetask（ネイティブ fs）
 
-cd /outputs/linetask/pc_worker
+cd /tmp/linetask/pc_worker
 export PYTHONPATH="$PWD"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-cowork"
 ```
 
+- **clone 先は必ずネイティブ fs**（`/tmp/linetask` 等）。OneDrive マウント（`/sessions/<sess>/mnt/...`）や `/outputs` 直下では、書込不可／`.git/config.lock` の unlink 非対応で clone が失敗する（2026-05-30 実測）。`WORK_DIR` を変える場合もネイティブ fs を選ぶこと。
 - ブランチ名にスラッシュがあり raw URL が解決しづらいテスト時は、`curl` の代わりに直接
-  `git clone --depth1 --branch <ref> https://oauth2:$GITHUB_PAT@github.com/k-probox-design/LineTaskCollection.git /outputs/linetask` してから `bash /outputs/linetask/scripts/sandbox-bootstrap.sh`（既に clone 済みなら bootstrap は再 clone する。テストでは `WORK_DIR` を変えるか、bootstrap を使わず手動 prep でもよい）。
+  `git clone --depth1 --branch <ref> https://oauth2:$GITHUB_PAT@github.com/k-probox-design/LineTaskCollection.git /tmp/linetask` し、`cp "$ONEDRIVE/.env" /tmp/linetask/pc_worker/.env` → `cd /tmp/linetask/pc_worker` → pip → AST 検証、の順で手動実行してよい。
 - 依存は `requirements.txt`（バージョン固定、Python 3.10/3.12 双方で解決可）を毎回 pip。`google-cloud-*` のバイナリ wheel があるため vendoring はしない。pip 実測 約6秒（2026-05-30 スモーク）。
 - `.env` は OneDrive `pc_cli/.env`（けいすけ記入済み）を clone 内へコピーして使う。SA 鍵は `.env` の `GOOGLE_APPLICATION_CREDENTIALS`（Windows パス）が実行時に MOUNT_MAP の glob で実マウントへ解決され、OneDrive `secrets/` から直接読まれる（小サイズで可読）。
-- pc_cli を `/outputs` から動かしても、`mounts.py` は session ベース検出に失敗した後 `/sessions/*/mnt/<名>` の glob でマウントを解決するため `@@@`/winpath 変換は機能する。
+- pc_cli を `/tmp` から動かしても、`mounts.py` は session ベース検出に失敗した後 `/sessions/*/mnt/<名>` の glob でマウントを解決するため `@@@`/winpath 変換は機能する。
 
 ### 6-2. マウント解決と winpath 一般化（動的パスの吸収）
 
