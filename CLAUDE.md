@@ -509,7 +509,7 @@ Cowork の bash は **WSL ではなく独立した Linux サンドボックス**
 - **パス系 .env(SHAREPOINT_ROOT / TMP_DOWNLOAD_DIR / LOG_OUTPUT_DIR / GOOGLE_APPLICATION_CREDENTIALS)は Windows パスでも unix パスでも記述可**(Windows 形式なら実行時 unix 解決、WSL 開発は従来の `/mnt/c` 値で後方互換)
 - **GCP 認証は SA 鍵ファイル + ADC 両対応**(サンドボックスは鍵、WSL は ADC)。鍵 JSON は `51.LINE投稿ボット/secrets/`(同期・コミット対象外)
 - **正は WSL リポジトリ。OneDrive 実行コピーは `scripts/sync-pc-cli-to-onedrive.sh` で同期**(`.env` / `secrets/` は同期せず秘密値保護)。依存は `requirements.txt` 固定、揮発サンドボックスで起動毎に `pip install --break-system-packages`
-- **サンドボックスへのコード配布は git clone を正とする(2026-05-30)**。OneDrive Files-On-Demand のプレースホルダは Cowork の Linux マウント越しに中身が途中で切れて読めず、`attrib +P` でも安定解消しないため。`scripts/sandbox-bootstrap.sh` が GitHub private repo を**ネイティブ fs(`/tmp/linetask`)**に clone→`.env` コピー→pip→AST 検証。OneDrive マウントや `/outputs` 直下は git 内部操作が失敗するため clone 先はネイティブ fs 必須。OneDrive からは小サイズで完全に読める `.env`・SA 鍵のみ使用。clone 用に `GITHUB_PAT`(Contents:Read のみの fine-grained PAT)を OneDrive `.env` に置く。検証は Windows 側 size でなく「サンドボックスが読むバイト列」で AST parse する
+- **サンドボックスへのコード配布は git clone を正とする(2026-05-30)**。OneDrive Files-On-Demand のプレースホルダは Cowork の Linux マウント越しに中身が途中で切れて読めず、`attrib +P` でも安定解消しないため。`scripts/sandbox-bootstrap.sh` が GitHub private repo を**ネイティブ fs の実行ごとユニーク dir(`mktemp -d /tmp/linetask.XXXXXX`)**に clone→`.env` コピー→pip→AST 検証。OneDrive マウントや `/outputs` 直下は git 内部操作が失敗するため clone 先はネイティブ fs 必須。スケジュール実行は前回と別ユーザーで走るため固定パス不可(rm -rf 不能)＝ユニーク化必須。bootstrap は stdout に `PCWORKER=<path>` 1 行のみ出力(ログは stderr)、後片付けは呼び出し側(Skill)が `trap EXIT` で。OneDrive からは小サイズで完全に読める `.env`・SA 鍵のみ使用。clone 用に `GITHUB_PAT`(Contents:Read のみの fine-grained PAT)を OneDrive `.env` に置く。検証は Windows 側 size でなく「サンドボックスが読むバイト列」で AST parse する
 
 > 新しい決定をしたら、その都度ここを更新する。
 

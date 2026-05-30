@@ -382,11 +382,12 @@ export GITHUB_PAT=$(grep -E '^GITHUB_PAT=' "$ONEDRIVE/.env" | head -1 | cut -d= 
 export REPO_REF=main
 curl -fsSL -H "Authorization: token $GITHUB_PAT" \
   "https://raw.githubusercontent.com/k-probox-design/LineTaskCollection/$REPO_REF/scripts/sandbox-bootstrap.sh" -o /tmp/b.sh
-bash /tmp/b.sh
-cd /tmp/linetask/pc_worker && export PYTHONPATH="$PWD"
+PCWORKER=$(bash /tmp/b.sh | sed -n 's/^PCWORKER=//p' | tail -1)   # stdout 1 行 = ユニークな pc_worker 絶対パス
+trap 'rm -rf "$(dirname "$PCWORKER")" 2>/dev/null || true' EXIT    # 自分が作った dir を終了時に best-effort 削除
+cd "$PCWORKER" && export PYTHONPATH="$PWD"
 ```
 
-clone 先は**ネイティブ fs（既定 `/tmp/linetask`）必須**。OneDrive マウントや `/outputs` 直下では git の内部操作が失敗する（2026-05-30 実測）。依存はバイナリ wheel を含む `google-cloud-*` があるため vendoring せず **毎回 pip**（実測 約6秒、2026-05-30）。`/tmp` から動かしても `mounts.py` の glob フォールバックで `@@@`/winpath は解決される。
+clone 先は**ネイティブ fs 必須**で、bootstrap が**実行ごとにユニークな `mktemp -d /tmp/linetask.XXXXXX`** を作る（スケジュール実行は前回と別ユーザーで走るため固定パスだと前回分を消せず詰まる）。OneDrive マウントや `/outputs` 直下では git の内部操作が失敗する（2026-05-30 実測）。bootstrap は stdout に `PCWORKER=<path>` の 1 行だけを出し（人間向けログは stderr）、後片付け（自分の dir 削除）は呼び出し側の責務。依存はバイナリ wheel を含む `google-cloud-*` があるため vendoring せず **毎回 pip**（実測 約6秒、2026-05-30）。`/tmp` から動かしても `mounts.py` の glob フォールバックで `@@@`/winpath は解決される。
 
 ### ② 認証（GCP サービスアカウント鍵）
 

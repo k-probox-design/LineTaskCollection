@@ -223,3 +223,5 @@ Notion 修正の再スモークで、OneDrive 実行コピー `51.LINE投稿ボ�
 テストは 66 → 67 pass（ネイティブ fs 実行＝session 外での glob フォールバック解決を追加）。
 
 > 追補（2026-05-30）: 当初 clone 先を `/outputs/linetask` としていたが、Cowork 実機で `/outputs` 直下は書込不可、OneDrive マウント実体（`/sessions/<sess>/mnt/outputs`）は `.git/config.lock` の unlink 非対応で clone が失敗すると判明。**clone 先を `/tmp/linetask`（ネイティブ fs）既定に修正**。git の実体は mount を避けネイティブ fs に置く。`.env`/SA 鍵は従来どおり OneDrive マウントから読む。git 経路の実機スモークは green（list-cases 199 案件 / write-task→archive / AST 全 10 完全）。
+
+> 追補2（2026-05-30）: スケジュール自動実行で linetask-sort Skill が**実機完走**（clone→pull-pending→画像読込→needs_review、DB 汚染なし）。ただし固定 `/tmp/linetask` は**実行ごとに別サンドボックスユーザー**で走るため前回分を `rm -rf` できず（所有者違い）警告が出た。対策: bootstrap の clone 先を **`mktemp -d /tmp/linetask.XXXXXX` で実行ごとユニーク化**、起動時に 1 時間以上前の消せる `/tmp/linetask.*` のみ best-effort 掃除。固定パス削除はしない。**出力契約**: stdout は `PCWORKER=<path>` の 1 行のみ（ログは stderr）。後片付けは別プロセスの bootstrap ではなく**呼び出し側 Skill が `trap EXIT` で**実施（bootstrap が自前 trap で消すと Skill が使う前に消えるため）。

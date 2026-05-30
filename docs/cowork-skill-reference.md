@@ -166,16 +166,22 @@ export REPO_REF=main          # main マージ前のテストは work ブラン�
 curl -fsSL -H "Authorization: token $GITHUB_PAT" \
   "https://raw.githubusercontent.com/k-probox-design/LineTaskCollection/$REPO_REF/scripts/sandbox-bootstrap.sh" \
   -o /tmp/sandbox-bootstrap.sh
-bash /tmp/sandbox-bootstrap.sh        # 既定 WORK_DIR=/tmp/linetask（ネイティブ fs）
 
-cd /tmp/linetask/pc_worker
+# stdout は「PCWORKER=<実行ごとユニークな pc_worker 絶対パス>」の 1 行のみ。これを拾って後続で使う。
+PCWORKER=$(bash /tmp/sandbox-bootstrap.sh | sed -n 's/^PCWORKER=//p' | tail -1)
+trap 'rm -rf "$(dirname "$PCWORKER")" 2>/dev/null || true' EXIT   # 自分が作った dir を実行終了時に best-effort 削除
+
+cd "$PCWORKER"
 export PYTHONPATH="$PWD"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-cowork"
 ```
 
-- **clone 先は必ずネイティブ fs**（`/tmp/linetask` 等）。OneDrive マウント（`/sessions/<sess>/mnt/...`）や `/outputs` 直下では、書込不可／`.git/config.lock` の unlink 非対応で clone が失敗する（2026-05-30 実測）。`WORK_DIR` を変える場合もネイティブ fs を選ぶこと。
+- **clone 先は実行ごとにユニーク**（bootstrap が `mktemp -d /tmp/linetask.XXXXXX`）。スケジュール実行は前回と別のサンドボックスユーザーで走るため固定パスだと前回分を `rm -rf` できず詰まる。bootstrap は起動時に「自分が消せる 1 時間以上前の `/tmp/linetask.*`」だけ best-effort 掃除する（他ユーザー所有はスキップ）。
+- **後片付けは呼び出し側（Skill）の責務**。bootstrap は別プロセスなので自前の `trap EXIT` で消すと Skill が使う前に消えてしまう。上記のように **Skill のトップレベル shell で `trap ... EXIT`** を張る（消せなくても警告のみで継続）。
+- 後続の各 pc_cli 呼び出しが別 bash になる場合は、その都度 `cd "$PCWORKER" && PYTHONPATH="$PCWORKER"` を再設定する（`PCWORKER` の値を Skill 側で保持しておく）。
+- **clone 先は必ずネイティブ fs**。OneDrive マウント（`/sessions/<sess>/mnt/...`）や `/outputs` 直下では、書込不可／`.git/config.lock` の unlink 非対応で clone が失敗する（2026-05-30 実測）。`WORK_DIR` を明示する場合もネイティブ fs を選ぶこと。
 - ブランチ名にスラッシュがあり raw URL が解決しづらいテスト時は、`curl` の代わりに直接
-  `git clone --depth1 --branch <ref> https://oauth2:$GITHUB_PAT@github.com/k-probox-design/LineTaskCollection.git /tmp/linetask` し、`cp "$ONEDRIVE/.env" /tmp/linetask/pc_worker/.env` → `cd /tmp/linetask/pc_worker` → pip → AST 検証、の順で手動実行してよい。
+  `WORK=$(mktemp -d /tmp/linetask.XXXXXX); git clone --depth1 --branch <ref> https://oauth2:$GITHUB_PAT@github.com/k-probox-design/LineTaskCollection.git "$WORK"` し、`cp "$ONEDRIVE/.env" "$WORK/pc_worker/.env"` → `cd "$WORK/pc_worker"` → pip → AST 検証、の順で手動実行してよい。
 - 依存は `requirements.txt`（バージョン固定、Python 3.10/3.12 双方で解決可）を毎回 pip。`google-cloud-*` のバイナリ wheel があるため vendoring はしない。pip 実測 約6秒（2026-05-30 スモーク）。
 - `.env` は OneDrive `pc_cli/.env`（けいすけ記入済み）を clone 内へコピーして使う。SA 鍵は `.env` の `GOOGLE_APPLICATION_CREDENTIALS`（Windows パス）が実行時に MOUNT_MAP の glob で実マウントへ解決され、OneDrive `secrets/` から直接読まれる（小サイズで可読）。
 - pc_cli を `/tmp` から動かしても、`mounts.py` は session ベース検出に失敗した後 `/sessions/*/mnt/<名>` の glob でマウントを解決するため `@@@`/winpath 変換は機能する。
