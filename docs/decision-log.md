@@ -188,3 +188,16 @@ Phase C' kickoff は `<SHAREPOINT_ROOT>/<案件名>/09.受領資料/` の固定�
 - スモークで実 DB のプロパティ名（`タスク名`/`優先度`/`備考`/`OneDrive`、優先度 option `仕分け待ち`）が定数と一致と確認済み、変更なし。実 data_source_id = `1eb17f63-e23f-8070-aeb2-000b0f9cd108`。
 
 `write_task` の実 DB 作成は副作用（row 増）のためけいすけ立ち会いで 1 回だけ検証 → 作成 row は削除する運用。テストは 64 → 66 pass（data_source_id 解決 + parent 形状を新 API に追従）。
+
+## 2026-05-30 — 同期スクリプトに OneDrive ピン留め（Pinned）を組み込み
+
+Notion 修正の再スモークで、OneDrive 実行コピー `51.LINE投稿ボット\pc_cli\` の変更 `.py` が「クラウドのみ（未ハイドレート）」になり、Cowork の Linux マウント越しに**中身が途中で切れて読めない**実害が出た（`notion_writer.py` が 5395B で頭打ち → `ast.parse` 失敗、さらに残存 `.pyc` で旧挙動に化ける二次被害）。
+
+### 対応（`scripts/sync-pc-cli-to-onedrive.sh`）
+
+- rsync 直後に **`attrib +P -U "<pc_cli>\*" /S /D`**（cmd.exe interop）で配下を Pinned 化＝OneDrive が実体をローカル保持し続ける。
+- rsync `-t` が引き継ぐ古い mtime のキャッシュ巻き戻りを避けるため、実コピーの mtime を `find -exec touch` で現在時刻へ更新（`secrets/`/`pc_worker_tmp/`/`pc_worker_logs/` は prune）。
+- 末尾に代表ファイル（`app/notion_writer.py`）の正↔コピーのサイズ一致検証を入れ、未ハイドレート時に WARN。
+- `--dry-run` 時は mtime 更新・ピン留め・検証をスキップ。
+
+検証結果: `pc_cli\app\*.py` 全 10 ファイルが `pinned=True` / `offline=False`、サイズ正一致。`.env`（けいすけの実値）と `secrets/` は rsync 除外のまま保持（同期・削除・コミットなし）。けいすけの手動ピンは今後不要。
