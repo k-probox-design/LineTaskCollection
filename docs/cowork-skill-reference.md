@@ -83,7 +83,7 @@ run_once():
             # 確信あり → SharePoint 格納 + Notion 更新 + GCS 削除
             dest = place-file(case=result.case_name, kind=受領資料,
                               title=f"{受信日} {result.title}")
-            update-task(page_id, onedrive_link=dest, priority=通常)  # 「仕分け完了」へ
+            update-task(page_id, onedrive_link=dest, status=完了)  # 「仕分け完了」へ（status 型。"通常" 優先度は無い）
             write-log(case=result.case_name, date=受信日, content=<議事ログ Markdown>)
             mark-done(doc_id)            # Firestore done + GCS 削除
         else:
@@ -106,13 +106,14 @@ SharePoint は階層・命名が不規則なので、案件フォルダは `list
 2. for each item:
      download <doc_id>               # 画像/PDF を取得 → Cowork が Read で中身を見る
      list-cases                      # Notion 案件候補（タスク名ベース）
-     list-case-folders               # SharePoint 案件フォルダ候補（絶対パス付き）
+     list-case-folders --query <案件名片>   # SharePoint 案件フォルダを名前で絞り込み（絶対パス付き、bug2 対策）
      ── Cowork が案件名 fuzzy match して案件フォルダの絶対パスを決定 ──
      ├ マッチあり・確信あり:
      │   write-task --case <案件名> --title ...        # Notion「仕分け待ち」row
-     │   place-file --src <local> --case-folder <絶対パス> --title ...   # 09.LINEやりとり資料/ へ
-     │   write-log  --case-folder <絶対パス> --date ... --content -      # 議事ログ（stdin）
-     │   update-task --page-id ... --priority 通常 --onedrive-link ...   # 仕分け完了化
+     │   place-file --src <local> --case-folder <windows 絶対パス> --title ...   # 09.LINEやりとり資料/ へ（bug1 修正後は windows パスでよい）
+     │   list-messages --around-doc <doc_id> --window-hours 48   # 前後会話を取得 → Cowork が関連分だけ選別
+     │   write-log  --case-folder <windows 絶対パス> --date ... --filename "<date> 議事ログ.html" --content -   # 議事ログ HTML（stdin）
+     │   update-task --page-id ... --status 完了 --onedrive-link ...   # 仕分け完了化（status 型）
      │   mark-done <doc_id>
      └ マッチなし・確信なし:
          けいすけにその場で対話確認 → 案件フォルダ手動作成 → 再仕分け
@@ -249,3 +250,39 @@ notion-client 3.1.0 は既定で Notion-Version `2025-09-03` を使い、DB ク�
 - `write-task` の page parent は `{"type": "data_source_id", "data_source_id": ...}`。
 - data_source_id は `NOTION_DATA_SOURCE_ID` があればそれ、無ければ `databases.retrieve` の `data_sources[0]` を自動解決してキャッシュ。設計タスク管理 DB の実値は `1eb17f63-e23f-8070-aeb2-000b0f9cd108`（単一データソース）。
 - プロパティ名（`タスク名`/`優先度`/`備考`/`OneDrive`、優先度 option `仕分け待ち`）は実 DB と一致、変更不要。
+
+---
+
+## 7. 議事ログ・会話取得・送信者（2026-05-30 拡張）
+
+### 7-1. list-messages（議事ログの素材取得）
+
+Firestore `intake_messages` から同一グループの前後メッセージを時系列（昇順）で返す。関連/非関連の判断は持たず、範囲内を機械的に全部返す（絞り込みは Cowork）。
+
+```
+list-messages --group-id <gid> [--around-doc <doc_id> | --since <iso> --until <iso>] [--window-hours 48] [--limit 200]
+```
+
+- `--around-doc <doc_id>`: その doc の `receivedAt` を中心に ±`window-hours`。資料 doc を中心に前後会話を取る糖衣。
+- `--around-doc` 無しは `--since`/`--until`（ISO8601）で範囲指定。どちらも無ければ範囲無制限で最新 `--limit` 件。
+- 返す各要素（値が無いキーは省略）: `doc_id` / `group_id` / `received_at`(ISO, UTC) / `message_type`(text/image/file/join 等) / `text` / `status` / `file_name` / `has_gcs`(bool) / `sender_user_id` / `sender_display_name`。
+
+### 7-2. 議事ログ HTML 化（write-log --filename）
+
+議事ログは HTML（LINE 風チャット）に標準化。**保存口は `write-log` を採用**（`place-file` ではない）。理由: write-log は `09.LINEやりとり資料/` 固定・上書き(overwrite=True) 意味論で、再生成される単一ログに合う。`place-file` は受領資料向けで重複時 ` (2)` 連番化するためログ上書きに不適。
+
+- Cowork が HTML 文字列を生成し `write-log --filename "<date> 議事ログ.html" --content -`（stdin）で保存。
+- `--filename` 省略時は従来どおり `<date> 議事ログ.md`。
+- 旧 `.md` 議事ログは、同 date なら `.html` とは別名で残る。整理はけいすけ手動削除（Cowork マウントからは削除不可）。
+
+### 7-3. 送信者（発言者）
+
+- Cloud Run 受信側（Phase B 拡張）が message event の `source.userId` を保存し、LINE group member profile API で表示名解決して `senderUserId` / `senderDisplayName` を Firestore に保存する（best-effort・短期キャッシュ・受信本処理はブロックしない）。
+- **この対応が Cloud Run にデプロイされた後に受信したメッセージのみ**送信者を持つ（過去分は webhook 原データに userId が無く遡及不可）。
+- `list-messages` の `sender_display_name`（無ければ `sender_user_id`、それも無ければ「発言者不明」）を議事ログの発言者表示に使う。
+
+### 7-4. Notion 優先度・ステータス（実 DB 確認 2026-05-30）
+
+- 優先度 select option: `仕分け待ち / すぐ / 高 / 中 / 低 / 趣味`。**"通常" は存在しない**。
+- 仕分け完了の表現は status 型プロパティ **`ステータス`**（option: `未着手 / 情報待ち / 進行中 / 依頼中 / 中断中 / 中村確認待 / 修正依頼済 / 社内確認待 / レイアウト完了 / 不要 / 完了`）で行う。
+- 投入は `--priority 仕分け待ち`、完了化は `update-task --status <値>`。どの完了値（`完了`? `レイアウト完了`? 別運用?）にするかはけいすけ最終確認待ち。

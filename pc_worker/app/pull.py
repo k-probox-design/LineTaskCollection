@@ -11,10 +11,12 @@ logger = logging.getLogger("pull")
 _fs_client: firestore.Client | None = None
 _gcs_client: storage.Client | None = None
 
-# Firestore のフィールド名 → pull-pending 出力キーの対応（任意項目。Phase B 未収集なら欠落）
+# Firestore のフィールド名 → 出力キーの対応（任意項目。未収集なら欠落）
+# senderUserId / senderDisplayName は Phase B 拡張（2026-05-30）で Cloud Run 受信側が保存。
+# 本対応より前に受信したメッセージは持たない（遡及不可）。
 _OPTIONAL_FIELDS = {
-    "userId": "user_id",
-    "userDisplayName": "user_display_name",
+    "senderUserId": "sender_user_id",
+    "senderDisplayName": "sender_display_name",
     "mimeType": "mime_type",
     "sizeBytes": "size_bytes",
 }
@@ -77,6 +79,92 @@ def list_pending(limit: int = 50) -> list[dict]:
     )
     items = [_doc_to_meta(d) for d in docs]
     logger.info("[PULL] list_pending returned %d items (limit=%d)", len(items), limit)
+    return items
+
+
+def _as_utc(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _msg_to_entry(doc) -> dict:
+    data = doc.to_dict() or {}
+    received = data.get("receivedAt")
+    entry = {
+        "doc_id": doc.id,
+        "group_id": data.get("groupId"),
+        "received_at": _as_utc(received).isoformat() if isinstance(received, datetime) else None,
+        # 受信側は `type` で保存するが、念のため messageType も見る
+        "message_type": data.get("type") or data.get("messageType"),
+        "text": data.get("text"),
+        "status": data.get("status"),
+        "file_name": data.get("fileName"),
+        "has_gcs": bool(data.get("gcsPath")),
+    }
+    for src_key, out_key in _OPTIONAL_FIELDS.items():
+        if src_key in data:
+            entry[src_key] = data[src_key]
+    # senderUserId 等は _OPTIONAL_FIELDS のキーで入るので出力キーに正規化
+    return {_OPTIONAL_FIELDS.get(k, k): v for k, v in entry.items() if v is not None}
+
+
+def list_messages(
+    group_id: str,
+    around_doc: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    window_hours: int = 48,
+    limit: int = 200,
+) -> list[dict]:
+    """同一グループの前後メッセージを時系列（昇順）で返す。関連/非関連の判断は持たない。
+
+    時間範囲: around_doc 指定時はその receivedAt を中心に ±window_hours。
+    それ以外は since/until（ISO8601）があれば使い、無ければ範囲無制限（最新 limit 件）。
+    """
+    from datetime import timedelta
+
+    start: datetime | None = None
+    end: datetime | None = None
+    if around_doc:
+        snap = _firestore().collection("intake_messages").document(around_doc).get()
+        if not snap.exists:
+            raise ValueError(f"around-doc not found: {around_doc}")
+        center = (snap.to_dict() or {}).get("receivedAt")
+        if not isinstance(center, datetime):
+            raise ValueError(f"around-doc has no receivedAt: {around_doc}")
+        center = _as_utc(center)
+        start, end = center - timedelta(hours=window_hours), center + timedelta(hours=window_hours)
+    else:
+        if since:
+            start = _as_utc(datetime.fromisoformat(since))
+        if until:
+            end = _as_utc(datetime.fromisoformat(until))
+
+    docs = (
+        _firestore()
+        .collection("intake_messages")
+        .where(filter=firestore.FieldFilter("groupId", "==", group_id))
+        .stream()
+    )
+
+    rows: list[tuple[datetime, object]] = []
+    for d in docs:
+        received = (d.to_dict() or {}).get("receivedAt")
+        if not isinstance(received, datetime):
+            continue
+        received = _as_utc(received)
+        if start and received < start:
+            continue
+        if end and received > end:
+            continue
+        rows.append((received, d))
+
+    rows.sort(key=lambda r: r[0])
+    rows = rows[:limit]
+    items = [_msg_to_entry(d) for _, d in rows]
+    logger.info(
+        "[PULL] list_messages group=%s returned %d (around=%s, window=%dh, limit=%d)",
+        group_id, len(items), around_doc, window_hours, limit,
+    )
     return items
 
 

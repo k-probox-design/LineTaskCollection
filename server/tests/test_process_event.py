@@ -35,6 +35,7 @@ class TestStoreMetadataJoin:
 
 class TestStoreMetadataText:
     def test_record_message_called(self):
+        # source に userId が無い（過去形式）→ sender フィールドは付かない
         with patch("app.firestore.record_message") as mock_record:
             from app.line_webhook import _store_metadata
             event = {
@@ -49,6 +50,34 @@ class TestStoreMetadataText:
                 "text": "hello",
                 "status": "done",
             })
+
+    def test_text_with_sender_resolved(self):
+        with patch("app.firestore.record_message") as mock_record, \
+             patch("app.profile.resolve_display_name", return_value="山田太郎"):
+            from app.line_webhook import _store_metadata
+            event = {
+                "type": "message",
+                "source": {"type": "group", "groupId": "Cabc123", "userId": "Uuser1"},
+                "message": {"type": "text", "id": "msg010", "text": "確認する。"},
+            }
+            _store_metadata(event)
+            meta = mock_record.call_args[0][1]
+            assert meta["senderUserId"] == "Uuser1"
+            assert meta["senderDisplayName"] == "山田太郎"
+
+    def test_text_with_sender_name_unresolved_keeps_userid(self):
+        with patch("app.firestore.record_message") as mock_record, \
+             patch("app.profile.resolve_display_name", return_value=None):
+            from app.line_webhook import _store_metadata
+            event = {
+                "type": "message",
+                "source": {"type": "group", "groupId": "Cabc123", "userId": "Uuser2"},
+                "message": {"type": "text", "id": "msg011", "text": "x"},
+            }
+            _store_metadata(event)
+            meta = mock_record.call_args[0][1]
+            assert meta["senderUserId"] == "Uuser2"
+            assert "senderDisplayName" not in meta
 
 
 class TestStoreMedia:
@@ -72,6 +101,17 @@ class TestStoreMedia:
             mock_upload.assert_called_once_with(b"data", "msg003", ".pdf")
             meta = mock_record.call_args[0][1]
             assert meta["fileName"] == "estimate.pdf"
+
+    def test_media_with_sender_resolved(self):
+        with patch("app.gcs.upload_to_pending", return_value="gs://bucket/pending/123_m.pdf"), \
+             patch("app.firestore.record_message") as mock_record, \
+             patch("app.profile.resolve_display_name", return_value="田口"):
+            from app.line_webhook import _store_media
+            _store_media(b"data", "m005", ".pdf", "Cabc123", "file", "zumen.pdf", "Uuser3")
+            meta = mock_record.call_args[0][1]
+            assert meta["senderUserId"] == "Uuser3"
+            assert meta["senderDisplayName"] == "田口"
+            assert meta["fileName"] == "zumen.pdf"
 
     def test_exception_logged_not_raised(self):
         with patch("app.gcs.upload_to_pending", side_effect=Exception("GCS error")), \

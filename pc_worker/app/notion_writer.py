@@ -13,9 +13,12 @@ logger = logging.getLogger("notion_writer")
 # 相違があればここだけ直せば済むように定数化している。
 PROP_TITLE = "タスク名"
 PROP_PRIORITY = "優先度"
+PROP_STATUS = "ステータス"
 PROP_NOTE = "備考"
 PROP_ONEDRIVE = "OneDrive"
 PRIORITY_PENDING = "仕分け待ち"
+# 実 DB 確認(2026-05-30): 優先度 options = 仕分け待ち/すぐ/高/中/低/趣味（"通常" は無い）。
+# 完了化は優先度ではなく status 型プロパティ「ステータス」(完了/不要/レイアウト完了/…) で行う。
 
 # Notion API のレート制限(平均 3 req/sec)対策。連続呼び出しの間隔を最低 0.34 秒空ける。
 _MIN_INTERVAL = 0.34
@@ -120,8 +123,9 @@ def update_task(
     priority: str | None = None,
     note: str | None = None,
     onedrive_link: str | None = None,
+    status: str | None = None,
 ) -> dict:
-    """既存 row を部分更新。指定したフィールドのみ更新する。"""
+    """既存 row を部分更新。指定したフィールドのみ更新する。完了化は status（ステータス）で。"""
     properties: dict = {}
     updated: list[str] = []
 
@@ -131,6 +135,9 @@ def update_task(
     if priority is not None:
         properties[PROP_PRIORITY] = {"select": {"name": priority}}
         updated.append("priority")
+    if status is not None:
+        properties[PROP_STATUS] = {"status": {"name": status}}
+        updated.append("status")
     if case is not None or note is not None:
         properties[PROP_NOTE] = {"rich_text": [{"text": {"content": _compose_note(case, note)}}]}
         if case is not None:

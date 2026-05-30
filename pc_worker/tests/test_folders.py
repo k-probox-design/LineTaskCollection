@@ -75,3 +75,22 @@ def test_windows_path_emitted(tmp_path):
     for f in folders:
         assert "absolute_path_unix" in f
         assert "absolute_path_windows" in f
+
+
+def test_query_filters_by_name_across_depths(tmp_path):
+    _build_tree(tmp_path)
+    # 深い案件（depth3「深い案件」）も query で拾える（bug2 対策）
+    deep = list_case_folders(str(tmp_path), max_depth=3, query="深い")
+    names = {f["folder_name"] for f in deep}
+    assert names == {"深い案件"}
+
+
+def test_query_is_case_insensitive_substring(tmp_path):
+    (tmp_path / "兵庫県_三和鶏園_姫路農場_様").mkdir()
+    hits = list_case_folders(str(tmp_path), max_depth=2, query="姫路")
+    assert [f["folder_name"] for f in hits] == ["兵庫県_三和鶏園_姫路農場_様"]
+
+
+def test_query_no_match_returns_empty(tmp_path):
+    _build_tree(tmp_path)
+    assert list_case_folders(str(tmp_path), max_depth=3, query="存在しない案件") == []

@@ -96,6 +96,17 @@ def test_update_task_only_specified_fields():
     client.databases.retrieve.assert_not_called()
 
 
+def test_update_task_sets_status_property():
+    # 完了化は status 型「ステータス」で（優先度に "通常" は無い）
+    client = MagicMock()
+    with patch("app.notion_writer._get_client", return_value=client):
+        result = update_task("page_1", status="完了")
+    assert "status" in result["updated_fields"]
+    props = client.pages.update.call_args.kwargs["properties"]
+    assert props["ステータス"] == {"status": {"name": "完了"}}
+    client.databases.retrieve.assert_not_called()
+
+
 def test_list_cases_aggregates_by_name(monkeypatch):
     monkeypatch.delenv("NOTION_DATA_SOURCE_ID", raising=False)
     client = _client_with_data_source()

@@ -272,22 +272,27 @@ python -m app.cli <subcommand> [options]
 
 stdout は結果 JSON のみ、ログは stderr（+ `LOG_OUTPUT_DIR` ファイル）に出る。エラー時は exit code != 0 で stderr に `{"error": "...", "detail": "..."}`。
 
-### サブコマンド一覧（10 個）
+### サブコマンド一覧（11 個）
 
 | サブコマンド | 役割 |
 |------------|------|
 | `pull-pending [--limit=50]` | Firestore status=pending をメタのみ JSON 配列で出力（GCS は触らない）|
 | `download <doc_id> [--dest-dir]` | GCS バイナリを DL、unix/windows 両形式のパスを返す |
 | `list-cases [--days=90]` | Notion から直近 N 日更新の案件名候補を出力 |
-| `list-case-folders [--root] [--max-depth=3]` | SHAREPOINT_ROOT 配下を再帰スキャンして案件フォルダ候補を出力 |
+| `list-case-folders [--root] [--max-depth=3] [--query <名前片>]` | SHAREPOINT_ROOT 配下を再帰スキャン。`--query` で名前一致のみ深く探索（不揃いな深さ対応、bug2）|
+| `list-messages --group-id [--around-doc \| --since --until] [--window-hours=48] [--limit=200]` | 同一グループの前後メッセージを時系列で返す（議事ログ素材。関連判断は Cowork）|
 | `write-task --case --title [--priority=仕分け待ち] [--note] [--onedrive-link]` | Notion 新規 row |
-| `update-task --page-id [--case --title --priority --note --onedrive-link]` | Notion 部分更新（優先度変更で仕分け完了扱い）|
-| `place-file --src --case-folder --title [--date]` | 案件フォルダ(絶対パス)配下の 09.LINEやりとり資料/ にファイル配置 |
-| `write-log --case-folder --date --content` | 議事ログ Markdown を 09.LINEやりとり資料/ に書き込み（固定名・上書き、`--content -` で stdin）|
+| `update-task --page-id [--case --title --priority --status --note --onedrive-link]` | Notion 部分更新。**完了化は `--status 完了`（status 型「ステータス」）**。優先度に "通常" は無い |
+| `place-file --src --case-folder --title [--date]` | 案件フォルダ配下の 09.LINEやりとり資料/ に配置。`--case-folder`/`--src` は Windows パス可（実行時に実マウントへ解決、bug1）|
+| `write-log --case-folder --date --content [--filename]` | 議事ログを 09.LINEやりとり資料/ に書き込み（上書き、`--content -` で stdin）。既定名 `<date> 議事ログ.md`、`--filename` で HTML 等の任意名 |
 | `mark-done <doc_id>` | Firestore done + GCS 削除 |
 | `mark-review <doc_id> [--reason]` | Firestore needs_review、GCS 保持 |
 
 全サブコマンドに `--log-run-id=<外部ID>` オプションがあり、Cowork 側から共通 run_id を渡して同一仕分けセッションのログを束ねられる。
+
+**Notion 優先度/ステータス（実 DB 確認 2026-05-30）**: 優先度 select の option は `仕分け待ち / すぐ / 高 / 中 / 低 / 趣味`（**"通常" は存在しない**）。仕分け完了の表現は優先度ではなく status 型プロパティ **`ステータス`**（`完了 / 不要 / レイアウト完了 / 進行中 / …`）で行う。LINE 受信は従来どおり `--priority 仕分け待ち` で投入し、完了時は `update-task --status <値>`。どの完了値を使うかはけいすけ最終確認待ち。
+
+**送信者（Phase B 拡張 2026-05-30）**: `list-messages` / `pull-pending` は受信側が保存していれば `sender_user_id` / `sender_display_name` を返す。Cloud Run 受信側がこの対応を入れた後に受信したメッセージのみ保持（過去分は遡及不可）。Cowork は議事ログの発言者表示に使う。
 
 LINE 由来資料（画像/PDF/議事ログ）は案件フォルダ配下の **`09.LINEやりとり資料/` に統一**して格納する（`09.受領資料` は使わない）。`09.LINEやりとり資料/` は存在しなければ pc_cli が自動作成（案件フォルダ自体の自動作成はしない）。
 
@@ -313,7 +318,7 @@ $ python -m app.cli write-task --case "佐藤邸新築" --title "【LINE】2026-
 # 5) SharePoint 格納（案件フォルダ絶対パス指定）→ 完了化 → GCS 削除
 $ python -m app.cli place-file --src "/mnt/c/.../abc123.pdf" --case-folder "/mnt/c/.../@@@決定案件/00.HESTA_..._様" --title "概算見積"
 {"destination_unix":"/mnt/c/.../09.LINEやりとり資料/2026-05-29 概算見積.pdf","destination_windows":"C:\\...","onedrive_link":null,"created_subfolder":false}
-$ python -m app.cli update-task --page-id page-xxxxx --priority 通常 --onedrive-link "C:\\..."
+$ python -m app.cli update-task --page-id page-xxxxx --status 完了 --onedrive-link "C:\\..."   # 完了化は status で（"通常" 優先度は無い）
 $ python -m app.cli mark-done abc123
 {"doc_id":"abc123","status":"done","gcs_deleted":true}
 ```

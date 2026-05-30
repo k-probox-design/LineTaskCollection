@@ -56,13 +56,22 @@ def _save_local(data: bytes, message_id: str, ext: str) -> Path:
     return dest
 
 
-def _store_media(data: bytes, message_id: str, ext: str, group_id: str, msg_type: str, file_name: str | None) -> None:
+def _store_media(
+    data: bytes,
+    message_id: str,
+    ext: str,
+    group_id: str,
+    msg_type: str,
+    file_name: str | None,
+    user_id: str | None = None,
+) -> None:
     try:
         if settings.local_fallback:
             _save_local(data, message_id, ext)
         else:
             from app.gcs import upload_to_pending
             from app.firestore import record_message
+            from app.profile import sender_fields
             gcs_path = upload_to_pending(data, message_id, ext)
             meta = {
                 "groupId": group_id,
@@ -72,6 +81,7 @@ def _store_media(data: bytes, message_id: str, ext: str, group_id: str, msg_type
             }
             if file_name:
                 meta["fileName"] = file_name
+            meta.update(sender_fields(group_id, user_id))
             record_message(message_id, meta)
     except Exception:
         logger.exception("[STORE] failed to store media message_id=%s", message_id)
@@ -110,12 +120,15 @@ def _store_metadata(event: dict) -> None:
             logger.info("[TEXT] groupId=%s text=%s", group_id, text)
             if not settings.local_fallback:
                 from app.firestore import record_message
-                record_message(msg_id, {
+                from app.profile import sender_fields
+                meta = {
                     "groupId": group_id,
                     "type": "text",
                     "text": text,
                     "status": "done",
-                })
+                }
+                meta.update(sender_fields(group_id, source.get("userId")))
+                record_message(msg_id, meta)
     except Exception:
         logger.exception("[STORE] failed to store metadata for event type=%s", event.get("type"))
 
@@ -132,7 +145,7 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks) -> R
     payload = await request.json()
     events = payload.get("events", [])
 
-    downloads: list[tuple[bytes, str, str, str, str, str | None]] = []
+    downloads: list[tuple[bytes, str, str, str, str, str | None, str | None]] = []
 
     for event in events:
         event_type = event.get("type", "")
@@ -144,14 +157,15 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks) -> R
                 ext = EXT_MAP.get(msg_type) or _ext_for_file_message(event)
                 source = event.get("source", {})
                 group_id = source.get("groupId", "N/A")
+                user_id = source.get("userId")
                 file_name = msg.get("fileName") if msg_type == "file" else None
                 data = _download_content_bytes(msg_id)
-                downloads.append((data, msg_id, ext, group_id, msg_type, file_name))
+                downloads.append((data, msg_id, ext, group_id, msg_type, file_name, user_id))
                 continue
 
         background_tasks.add_task(_store_metadata, event)
 
-    for data, msg_id, ext, group_id, msg_type, file_name in downloads:
-        background_tasks.add_task(_store_media, data, msg_id, ext, group_id, msg_type, file_name)
+    for data, msg_id, ext, group_id, msg_type, file_name, user_id in downloads:
+        background_tasks.add_task(_store_media, data, msg_id, ext, group_id, msg_type, file_name, user_id)
 
     return Response(status_code=200, content="OK")

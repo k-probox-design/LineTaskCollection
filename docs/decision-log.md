@@ -224,4 +224,27 @@ Notion 修正の再スモークで、OneDrive 実行コピー `51.LINE投稿ボ�
 
 > 追補（2026-05-30）: 当初 clone 先を `/outputs/linetask` としていたが、Cowork 実機で `/outputs` 直下は書込不可、OneDrive マウント実体（`/sessions/<sess>/mnt/outputs`）は `.git/config.lock` の unlink 非対応で clone が失敗すると判明。**clone 先を `/tmp/linetask`（ネイティブ fs）既定に修正**。git の実体は mount を避けネイティブ fs に置く。`.env`/SA 鍵は従来どおり OneDrive マウントから読む。git 経路の実機スモークは green（list-cases 199 案件 / write-task→archive / AST 全 10 完全）。
 
+## 2026-05-30 — bootstrap の clone 先を実行ごとユニーク化（cross-user leftover 対策）
+
 > 追補2（2026-05-30）: スケジュール自動実行で linetask-sort Skill が**実機完走**（clone→pull-pending→画像読込→needs_review、DB 汚染なし）。ただし固定 `/tmp/linetask` は**実行ごとに別サンドボックスユーザー**で走るため前回分を `rm -rf` できず（所有者違い）警告が出た。対策: bootstrap の clone 先を **`mktemp -d /tmp/linetask.XXXXXX` で実行ごとユニーク化**、起動時に 1 時間以上前の消せる `/tmp/linetask.*` のみ best-effort 掃除。固定パス削除はしない。**出力契約**: stdout は `PCWORKER=<path>` の 1 行のみ（ログは stderr）。後片付けは別プロセスの bootstrap ではなく**呼び出し側 Skill が `trap EXIT` で**実施（bootstrap が自前 trap で消すと Skill が使う前に消えるため）。
+
+## 2026-05-30 — 議事ログ HTML 化 / 会話取得(list-messages) / 送信者保存 / フォルダ探索・winpath バグ修正
+
+3 つの kickoff（placefile-winpath-and-folder-discovery / conversation-log-feature / sender-capture-and-html-log）を 1 セットで実装。
+
+### pc_cli（pc_worker）
+
+- **bug1 修正**: `place-file` / `write-log` が `--case-folder`（および place-file の `--src`）の Windows パスを `mounts.resolve_to_unix` で実マウントへ解決していなかった。cli の入口で解決するよう修正。Skill を windows パス渡しに戻せる。
+- **bug2 対応**: `list-case-folders --query <名前片>` を追加。query 指定時は深さ既定を 6 に上げ、名前一致フォルダだけ返す（全件は depth3 で約 6700 件・深さ不揃いで取りこぼすため、Notion 案件名で引くのが安定）。既定（query 無し）の挙動は不変。
+- **list-messages 追加**: `intake_messages` から同一グループの前後メッセージを時系列で返す（`--around-doc` 中心 ±window-hours、または `--since`/`--until`）。関連判断は持たず範囲内を全部返す＝素材提供に徹する。
+- **write-log `--filename`**: 任意ファイル名で保存可能に（議事ログ HTML 化＝`<date> 議事ログ.html`）。HTML 保存口は write-log を採用（上書き意味論が再生成ログに合う。place-file は受領資料向けで連番化のため不適）。
+- **Notion 優先度/ステータス確定**: 実 DB を MCP で確認し、優先度に **"通常" option は無い**（仕分け待ち/すぐ/高/中/低/趣味）と判明。完了化は status 型プロパティ **`ステータス`**（完了/不要/レイアウト完了/…）で行う。`update-task --status` を追加。どの完了値を使うかはけいすけ最終確認待ち。
+- `sender_user_id` / `sender_display_name` を pull 系の任意出力に追加。
+
+### Cloud Run 受信側（server）— ① 送信者保存
+
+- `app/profile.py` を新設。message event の `source.userId` を保存し、group member profile API（1:1 は profile）で `displayName` を best-effort 解決、`senderUserId` / `senderDisplayName` を Firestore に保存。短期キャッシュ・失敗時は userId のみ・受信本処理（200 即返し＋BackgroundTasks）はブロックしない。チャネルアクセストークンは既存 Secret を使用（けいすけの新規手作業なし）。
+- **遡及不可**: 本対応デプロイ後に受信したメッセージのみ送信者を持つ（過去分は webhook 原データに userId が無い）。
+- **Cloud Run 再デプロイが必要**（本番反映）。デプロイはけいすけ確認後（タグ・main マージと合わせて）に実施＝このタスクでは未デプロイ。
+
+テスト: pc_worker 67→**82 pass**、server 13→**21 pass**。
