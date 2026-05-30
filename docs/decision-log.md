@@ -267,3 +267,14 @@ Cowork 実機検証で 2 点判明し対応:
   - `folders.list_case_folders` を `iterdir+is_dir` → **`os.scandir` + 遅延 is_dir** に。`^\d{2}\.` 始まり（案件本体/番号付きサブフォルダ）は葉として配下に降りず、**query に名前が合わない葉は stat すら省く**。重いメタ（child数/has_line/mtime）はマッチ分だけ計算。
   - ただし @@@ 全走査は非葉ディレクトリ毎の scandir が不可避で根本的に遅い（DrvFs で ~20-30s、サンドボックスは更に悪化）。**運用は 2 段スコープを正とする**: `--max-depth 1` でブランチ列挙（実測 ~0.7s）→ Notion 案件名ヒントでブランチを推定 → `--root <branch> --query <案件>`（実測 ~1.3s, hits=1）。docs に明記。
 - pc_worker 86→**89 pass**（葉プルーン・深い案件発見・--root 解決のテスト追加）。
+
+## 2026-05-30 — LINE グループ名（トークルーム名）の自動取得（work/2026-05-30）
+
+議事ログ HTML の部屋識別を実グループ名で行えるよう、送信者名解決（D-1）と同じ並びでグループ名を解決・保存。
+
+- **server `profile.resolve_group_name(group_id)`**: `GET /v2/bot/group/{groupId}/summary` の `groupName`。room/1:1（groupId 無し）や失敗は None。常駐キャッシュ。
+- **server `line_webhook`**: text/media/join 経路で `_record_group_name` を呼び、`firestore.set_group_name`（`intake_groups/{groupId}.groupName` を merge）。`_group_synced` でインスタンス内 1 group 1 回に抑制（summary API・書込の連打防止）。
+- **pc_cli `pull.list_messages`**: `intake_groups` から `groupName` を引き各要素に `group_name` を付与（無ければ付けない）。pc_cli は LINE トークンを持たない＝解決はせず保存済みの値を読むだけ（秘密境界維持）。
+- **バックフィル**: `server/scripts/backfill_group_names.py`（任意・一回限り）。LINE トークン＋Firestore が揃う server 環境（Cloud Shell 等）で実行。PC では実行しない。既定は新規受信ぶんのみ反映。
+
+D-1 同様 **Cloud Run 再デプロイで反映**（デプロイ後の受信ぶんから group_name）。テスト server 21→**26**、pc_worker 89→**91**。main マージ＋タグ＋デプロイはけいすけ明示確認後。

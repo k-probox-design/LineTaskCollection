@@ -18,11 +18,20 @@ def _utc(y, mo, da, h=0, mi=0):
     return datetime(y, mo, da, h, mi, tzinfo=timezone.utc)
 
 
-def _fs_with_stream(docs):
-    """collection().where().stream() が docs を返す Firestore モック。"""
+def _fs_with_stream(docs, group_name=None):
+    """collection().where().stream() が docs を返す Firestore モック。
+
+    intake_groups の document().get() は既定で exists=False（group_name 無し）。
+    group_name を渡すと exists=True かつ groupName を返す。
+    """
     client = MagicMock()
     stream_chain = client.collection.return_value.where.return_value
     stream_chain.stream.return_value = iter(docs)
+
+    gsnap = MagicMock()
+    gsnap.exists = group_name is not None
+    gsnap.to_dict.return_value = {"groupName": group_name} if group_name else {}
+    client.collection.return_value.document.return_value.get.return_value = gsnap
     return client
 
 
@@ -84,6 +93,22 @@ def test_list_messages_limit_truncates():
     with patch("app.pull._firestore", return_value=client):
         out = pull.list_messages("Cgrp", limit=3)
     assert len(out) == 3
+
+
+def test_list_messages_attaches_group_name():
+    docs = [_doc("a", _utc(2026, 5, 30, 12, 0), type="text", text="x", status="done")]
+    client = _fs_with_stream(docs, group_name="姫路農場グループ")
+    with patch("app.pull._firestore", return_value=client):
+        out = pull.list_messages("Cgrp")
+    assert out[0]["group_name"] == "姫路農場グループ"
+
+
+def test_list_messages_no_group_name_when_absent():
+    docs = [_doc("a", _utc(2026, 5, 30, 12, 0), type="text", text="x", status="done")]
+    client = _fs_with_stream(docs)  # group_name 無し
+    with patch("app.pull._firestore", return_value=client):
+        out = pull.list_messages("Cgrp")
+    assert "group_name" not in out[0]
 
 
 def test_list_messages_around_doc_missing_raises():

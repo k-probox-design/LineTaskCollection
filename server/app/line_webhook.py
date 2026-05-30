@@ -56,6 +56,26 @@ def _save_local(data: bytes, message_id: str, ext: str) -> Path:
     return dest
 
 
+# インスタンス内で「このグループのグループ名は intake_groups に保存済み」を覚える集合。
+# summary API と Firestore 書込を group あたり 1 回に抑える。
+_group_synced: set[str] = set()
+
+
+def _record_group_name(group_id: str) -> None:
+    """グループ名を best-effort 解決して intake_groups に保存（インスタンス内で 1 group 1 回）。"""
+    if settings.local_fallback or not group_id or group_id == "N/A" or group_id in _group_synced:
+        return
+    try:
+        from app.profile import resolve_group_name
+        from app.firestore import set_group_name
+        name = resolve_group_name(group_id)
+        if name:
+            set_group_name(group_id, name)
+            _group_synced.add(group_id)
+    except Exception:
+        logger.warning("[GROUP] group name 解決/保存に失敗 group=%s", group_id)
+
+
 def _store_media(
     data: bytes,
     message_id: str,
@@ -83,6 +103,7 @@ def _store_media(
                 meta["fileName"] = file_name
             meta.update(sender_fields(group_id, user_id))
             record_message(message_id, meta)
+            _record_group_name(group_id)
     except Exception:
         logger.exception("[STORE] failed to store media message_id=%s", message_id)
 
@@ -106,6 +127,7 @@ def _store_metadata(event: dict) -> None:
                         "status": "done",
                     },
                 )
+                _record_group_name(group_id)
             return
 
         if event_type != "message":
@@ -129,6 +151,7 @@ def _store_metadata(event: dict) -> None:
                 }
                 meta.update(sender_fields(group_id, source.get("userId")))
                 record_message(msg_id, meta)
+                _record_group_name(group_id)
     except Exception:
         logger.exception("[STORE] failed to store metadata for event type=%s", event.get("type"))
 
