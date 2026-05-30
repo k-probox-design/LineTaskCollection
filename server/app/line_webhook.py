@@ -76,6 +76,27 @@ def _record_group_name(group_id: str) -> None:
         logger.warning("[GROUP] group name 解決/保存に失敗 group=%s", group_id)
 
 
+def _enrich_after_save(message_id: str, group_id: str, user_id: str | None) -> None:
+    """メッセージ保存『後』に走る best-effort のエンリッチ（送信者表示名・グループ名）。
+
+    ★ 重要: LINE プロフィール/グループ summary の HTTP 呼び出しはここ（=record_message より後）でだけ行う。
+    Cloud Run のレスポンス後 CPU スロットルで本タスクが途中で止まっても、メッセージ保存自体は
+    既に完了しているので取りこぼさない（2026-05-31 の取り込み欠落バグの恒久対策）。
+    失敗・タイムアウトは握りつぶす。
+    """
+    if settings.local_fallback:
+        return
+    try:
+        from app.profile import resolve_display_name
+        from app.firestore import update_message
+        name = resolve_display_name(group_id, user_id)
+        if name:
+            update_message(message_id, {"senderDisplayName": name})
+    except Exception:
+        logger.warning("[ENRICH] senderDisplayName 解決/保存に失敗 msg=%s", message_id)
+    _record_group_name(group_id)
+
+
 def _store_media(
     data: bytes,
     message_id: str,
@@ -91,7 +112,6 @@ def _store_media(
         else:
             from app.gcs import upload_to_pending
             from app.firestore import record_message
-            from app.profile import sender_fields
             gcs_path = upload_to_pending(data, message_id, ext)
             meta = {
                 "groupId": group_id,
@@ -101,9 +121,10 @@ def _store_media(
             }
             if file_name:
                 meta["fileName"] = file_name
-            meta.update(sender_fields(group_id, user_id))
+            if user_id:
+                meta["senderUserId"] = user_id  # userId はイベント内＝HTTP 不要。表示名は保存後に付与
             record_message(message_id, meta)
-            _record_group_name(group_id)
+            _enrich_after_save(message_id, group_id, user_id)
     except Exception:
         logger.exception("[STORE] failed to store media message_id=%s", message_id)
 
@@ -142,16 +163,18 @@ def _store_metadata(event: dict) -> None:
             logger.info("[TEXT] groupId=%s text=%s", group_id, text)
             if not settings.local_fallback:
                 from app.firestore import record_message
-                from app.profile import sender_fields
+                user_id = source.get("userId")
                 meta = {
                     "groupId": group_id,
                     "type": "text",
                     "text": text,
                     "status": "done",
                 }
-                meta.update(sender_fields(group_id, source.get("userId")))
+                if user_id:
+                    meta["senderUserId"] = user_id  # userId はイベント内＝HTTP 不要
+                # 保存を最優先（HTTP より前）。表示名・グループ名は保存後に best-effort。
                 record_message(msg_id, meta)
-                _record_group_name(group_id)
+                _enrich_after_save(msg_id, group_id, user_id)
     except Exception:
         logger.exception("[STORE] failed to store metadata for event type=%s", event.get("type"))
 
