@@ -106,7 +106,8 @@ SharePoint は階層・命名が不規則なので、案件フォルダは `list
 2. for each item:
      download <doc_id>               # 画像/PDF を取得 → Cowork が Read で中身を見る
      list-cases                      # Notion 案件候補（タスク名ベース）
-     list-case-folders --query <案件名片>   # SharePoint 案件フォルダを名前で絞り込み（絶対パス付き、bug2 対策）
+     list-case-folders --max-depth 1                       # ブランチ列挙（速い）
+     list-case-folders --root <branch> --query <案件名片>   # ブランチに絞って名前引き（速い・絶対パス付き）
      ── Cowork が案件名 fuzzy match して案件フォルダの絶対パスを決定 ──
      ├ マッチあり・確信あり:
      │   write-task --case <案件名> --title ...        # Notion「仕分け待ち」row
@@ -122,6 +123,27 @@ SharePoint は階層・命名が不規則なので、案件フォルダは `list
 
 - `list-case-folders` の `has_line_yaritori_folder` / `child_dir_count` / `last_modified` を案件判定のヒントに使う
 - 案件フォルダ自体の自動作成はしない（NG）。`09.LINEやりとり資料/` サブフォルダは place-file/write-log が自動作成する
+
+#### ★ list-case-folders は「2 段スコープ」で引く（A-2 性能対策、2026-05-30 実測）
+
+`@@@` 全体を `--query` で再帰すると、サンドボックスの OneDrive オンデマンドマウントでは
+非葉ディレクトリ毎の scandir ハイドレートで **45 秒の bash 制約を超える**（全走査は実用不可）。
+代わりに**ブランチに絞ってから引く**:
+
+```
+# Phase1: トップレベルのブランチ一覧（速い・実測 ~0.7s）
+list-case-folders --max-depth 1
+#  → @@@決定案件 / @@HESTA_産業見積もり案件 / @@関電_Kenes / @HESTA_住宅決定案件 /
+#     @HESTA_住宅見積もり案件 / テラチャージ / 野立て太陽光 … など
+
+# Phase2: Notion 案件名/客先のヒントでブランチを推定し、--root で絞って名前引き（速い・実測 ~1.3s）
+list-case-folders --root "C:\Users\knaka\OneDrive - 株式会社ビギン\@@@\@@関電_Kenes" --query 姫路
+#  → hits=1（兵庫県_三和鶏園_姫路農場_様、absolute_path_windows 付き）
+```
+
+- `--root` は Windows パスでよい（実行時に実マウントへ解決）。
+- 当てるブランチが分からなければ、客先/カテゴリから候補を 2〜3 個に絞って順に scoped query すればよい（各ブランチ内は速い）。
+- 高速化の中身: `^\d{2}\.` 始まり（`00.案件…` や `09.受領資料`）は葉として配下に降りず、名前が query に合わない葉は dir 判定の stat すら省く。重いメタ（child数/mtime 等）はマッチ分だけ計算。
 
 ### 議事ログ Markdown の構造（旧 log_writer.build_session_log）
 

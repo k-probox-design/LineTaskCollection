@@ -94,3 +94,28 @@ def test_query_is_case_insensitive_substring(tmp_path):
 def test_query_no_match_returns_empty(tmp_path):
     _build_tree(tmp_path)
     assert list_case_folders(str(tmp_path), max_depth=3, query="存在しない案件") == []
+
+
+def test_does_not_descend_into_numbered_leaf_folders(tmp_path):
+    # 案件フォルダ 00.X 配下の番号付きサブフォルダ（09.受領資料 等）には降りない＝結果に出ない
+    case = tmp_path / "00.案件_様"
+    case.mkdir()
+    (case / "09.受領資料").mkdir()
+    (case / "09.LINEやりとり資料").mkdir()
+    (case / "09.受領資料" / "さらに深い").mkdir()
+
+    names = {f["folder_name"] for f in list_case_folders(str(tmp_path), max_depth=6)}
+    assert "00.案件_様" in names          # 案件本体は出る
+    assert "09.受領資料" not in names      # 配下の番号付きサブフォルダは走査しない
+    assert "さらに深い" not in names       # その下も当然出ない
+
+
+def test_finds_deep_case_under_nonleaf_bucket(tmp_path):
+    # ブランチ/バケツ（番号付きでない）は降りるので、depth4 の案件も query で拾える
+    deep = tmp_path / "@@関電_Kenes" / "Kenes_見積もり案件" / "2025年作成" / "兵庫県_三和鶏園_姫路農場_様"
+    deep.mkdir(parents=True)
+    (deep / "09.受領資料").mkdir()
+    hits = list_case_folders(str(tmp_path), max_depth=6, query="姫路")
+    assert [f["folder_name"] for f in hits] == ["兵庫県_三和鶏園_姫路農場_様"]
+    assert hits[0]["depth"] == 4
+    assert hits[0]["has_line_yaritori_folder"] is False

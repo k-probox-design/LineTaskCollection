@@ -258,3 +258,12 @@ Notion 修正の再スモークで、OneDrive 実行コピー `51.LINE投稿ボ�
 - `write-task --priority` の既定は None にし、未指定時は writer 側で既定解決（典型値が `.env` に集約）。
 
 pc_worker 82→**86 pass**。完了化を優先度/ステータスのどちらで管理するか（mark-done 後の Notion 更新方針）は引き続きけいすけ宿題。
+
+### A-2 実機検証フィードバック対応（2026-05-30）— --root winpath ＋ スキャン性能
+
+Cowork 実機検証で 2 点判明し対応:
+- **①--root が winpath 未解決**: `list-case-folders --root "C:\..."` が root_not_found。cli で `--root` を `mounts.resolve_to_unix` に通すよう修正（A-1 と同じ穴）。
+- **②@@@ 全走査が遅い**: OneDrive オンデマンドマウントの scandir ハイドレートで `--query`（@@@ 全体・max-depth6）が 45 秒の bash 制約超過。対応:
+  - `folders.list_case_folders` を `iterdir+is_dir` → **`os.scandir` + 遅延 is_dir** に。`^\d{2}\.` 始まり（案件本体/番号付きサブフォルダ）は葉として配下に降りず、**query に名前が合わない葉は stat すら省く**。重いメタ（child数/has_line/mtime）はマッチ分だけ計算。
+  - ただし @@@ 全走査は非葉ディレクトリ毎の scandir が不可避で根本的に遅い（DrvFs で ~20-30s、サンドボックスは更に悪化）。**運用は 2 段スコープを正とする**: `--max-depth 1` でブランチ列挙（実測 ~0.7s）→ Notion 案件名ヒントでブランチを推定 → `--root <branch> --query <案件>`（実測 ~1.3s, hits=1）。docs に明記。
+- pc_worker 86→**89 pass**（葉プルーン・深い案件発見・--root 解決のテスト追加）。

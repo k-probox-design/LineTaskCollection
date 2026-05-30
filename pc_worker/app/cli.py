@@ -132,6 +132,9 @@ def list_case_folders_cmd(
     全件列挙（query 無し）は depth3 で約 6700 件と多いので、Skill は Notion 案件名で --query するのが安定。
     """
     _init_logging(log_run_id)
+    # --root も Windows パスで来うる。実マウントへ解決（bug1 の取りこぼし＝A-2 要対応①）。
+    if root:
+        root = mounts.resolve_to_unix(root, settings.path_maps)
     effective_depth = max_depth if query is None else max(max_depth, 6)
     try:
         result = folders.list_case_folders(root, effective_depth, query=query)

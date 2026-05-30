@@ -127,6 +127,16 @@ def test_list_messages_passes_args_and_outputs():
     assert m.call_args.kwargs["window_hours"] == 24
 
 
+def test_list_case_folders_resolves_windows_root(monkeypatch):
+    # A-2 ①: --root の Windows パスも実マウントへ解決してから渡す
+    monkeypatch.setattr("app.mounts.discover_maps",
+                        lambda raw, self_path=None: [("/sessions/s/mnt/@@@", "C:\\X\\@@@")])
+    with patch("app.cli.folders.list_case_folders", return_value=[]) as m:
+        result = runner.invoke(app, ["list-case-folders", "--root", "C:\\X\\@@@\\branch"])
+    assert result.exit_code == 0
+    m.assert_called_once_with("/sessions/s/mnt/@@@/branch", 3, query=None)
+
+
 def test_list_case_folders_root_not_found():
     with patch("app.cli.folders.list_case_folders", side_effect=FileNotFoundError("no root")):
         result = runner.invoke(app, ["list-case-folders", "--root", "/nope"])

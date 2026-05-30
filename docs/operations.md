@@ -279,7 +279,7 @@ stdout は結果 JSON のみ、ログは stderr（+ `LOG_OUTPUT_DIR` ファイ�
 | `pull-pending [--limit=50]` | Firestore status=pending をメタのみ JSON 配列で出力（GCS は触らない）|
 | `download <doc_id> [--dest-dir]` | GCS バイナリを DL、unix/windows 両形式のパスを返す |
 | `list-cases [--days=90]` | Notion から直近 N 日更新の案件名候補を出力 |
-| `list-case-folders [--root] [--max-depth=3] [--query <名前片>]` | SHAREPOINT_ROOT 配下を再帰スキャン。`--query` で名前一致のみ深く探索（不揃いな深さ対応、bug2）|
+| `list-case-folders [--root] [--max-depth=3] [--query <名前片>]` | 配下を再帰スキャン。`--root`/`--query` 可（`--root` は Windows パス可）。**2 段スコープ推奨**: `--max-depth 1` でブランチ列挙→`--root <branch> --query <案件>`（@@@ 全走査はマウントが遅く非推奨）|
 | `list-messages --group-id [--around-doc \| --since --until] [--window-hours=48] [--limit=200]` | 同一グループの前後メッセージを時系列で返す（議事ログ素材。関連判断は Cowork）|
 | `write-task --case --title [--priority] [--note] [--onedrive-link] [--assignee-user-id]` | Notion 新規 row。既定優先度 `Claude追記`（`NOTION_DEFAULT_PRIORITY`）、担当に `NOTION_DEFAULT_ASSIGNEE_USER_ID` をセット（人別ビュー対応）|
 | `update-task --page-id [--case --title --priority --status --note --onedrive-link --assignee-user-id]` | Notion 部分更新。**完了化は `--status 完了`（status 型「ステータス」）**。優先度に "通常" は無い |
