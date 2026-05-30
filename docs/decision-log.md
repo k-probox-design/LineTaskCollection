@@ -174,3 +174,17 @@ Phase C' kickoff は `<SHAREPOINT_ROOT>/<案件名>/09.受領資料/` の固定�
 - 不要になった `ANTHROPIC_API_KEY` / `CLASSIFY_CONFIDENCE_THRESHOLD` を config / conftest から撤去。
 
 `requires-python` を 3.11 → 3.10 に引き下げ（サンドボックスが 3.10）。テストは 42 → 64 pass（mounts / winpath 一般化 / config の Windows パス解決・鍵正規化を追加）。
+
+## 2026-05-30 — notion_writer を Notion データソース API（2025-09-03）対応に修正
+
+サンドボックススモークで `list-cases` が `'DatabasesEndpoint' object has no attribute 'query'` で exit=1。原因は **notion-client 3.1.0 が既定で Notion-Version `2025-09-03` を使う**こと。このバージョンで DB クエリ／page 作成が DB 単位 → データソース単位に移動した。
+
+### 対応（案 A: データソース API へ移行を採用、案 B のバージョン据え置きは退避策として不採用）
+
+- `data_source_id` を `databases.retrieve(database_id)["data_sources"][0]` から解決してキャッシュ（`_get_data_source_id`）。`NOTION_DATA_SOURCE_ID` で固定も可（未設定なら自動解決）。当 DB は単一データソース前提（複数化したら index 0 固定を見直す）。
+- `list_cases`: `databases.query` → `data_sources.query(data_source_id=...)`。filter/start_cursor/has_more/next_cursor は従来どおり。
+- `write_task`: page parent を `{"type": "data_source_id", "data_source_id": <dsid>}` に変更。
+- `update_task`: `pages.update(page_id=...)` は page_id 指定のため変更不要。
+- スモークで実 DB のプロパティ名（`タスク名`/`優先度`/`備考`/`OneDrive`、優先度 option `仕分け待ち`）が定数と一致と確認済み、変更なし。実 data_source_id = `1eb17f63-e23f-8070-aeb2-000b0f9cd108`。
+
+`write_task` の実 DB 作成は副作用（row 増）のためけいすけ立ち会いで 1 回だけ検証 → 作成 row は削除する運用。テストは 64 → 66 pass（data_source_id 解決 + parent 形状を新 API に追従）。

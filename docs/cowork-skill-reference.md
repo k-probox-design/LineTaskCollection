@@ -219,3 +219,12 @@ RUN_ID="$(date +%Y%m%d-%H%M%S)-cowork"
 
 - ④⑤⑥はテスト案件フォルダ（実害のない場所）で行うか、けいすけと確認した案件で行う。`mark-done` は GCS 実削除なので本番投稿のスモークでのみ。
 - `LOG_OUTPUT_DIR` 設定時は `<LOG_OUTPUT_DIR>/YYYY-MM-DD/$RUN_ID.jsonl` に各手順のログが追記される（監査用）。
+
+### 6-5. Notion データソース API（2025-09-03、notion-client 3.1.0）
+
+notion-client 3.1.0 は既定で Notion-Version `2025-09-03` を使い、DB クエリ／page 作成が **DB 単位 → データソース単位**に変わった。pc_cli は対応済み:
+
+- `list-cases` は `data_sources.query(data_source_id=...)` を使う（`databases.query` は廃止）。
+- `write-task` の page parent は `{"type": "data_source_id", "data_source_id": ...}`。
+- data_source_id は `NOTION_DATA_SOURCE_ID` があればそれ、無ければ `databases.retrieve` の `data_sources[0]` を自動解決してキャッシュ。設計タスク管理 DB の実値は `1eb17f63-e23f-8070-aeb2-000b0f9cd108`（単一データソース）。
+- プロパティ名（`タスク名`/`優先度`/`備考`/`OneDrive`、優先度 option `仕分け待ち`）は実 DB と一致、変更不要。

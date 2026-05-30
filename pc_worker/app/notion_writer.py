@@ -23,6 +23,7 @@ _last_call = 0.0
 _throttle_lock = threading.Lock()
 
 _client: Client | None = None
+_data_source_id: str | None = None
 
 
 def _throttle() -> None:
@@ -39,6 +40,38 @@ def _get_client() -> Client:
     if _client is None:
         _client = Client(auth=settings.notion_api_key)
     return _client
+
+
+def _get_data_source_id() -> str:
+    """設計タスク管理 DB の data_source_id を解決してキャッシュする。
+
+    notion-client 3.x が既定で使う Notion-Version 2025-09-03 では、DB クエリと page 作成が
+    DB ではなく「データソース」単位になった（`databases.query` 廃止 → `data_sources.query`、
+    page parent は `database_id` → `data_source_id`）。
+
+    `NOTION_DATA_SOURCE_ID` が .env にあればそれを使う。無ければ `databases.retrieve` の
+    `data_sources[0]` を採る（当 DB は単一データソース前提。複数データソースを持つようになったら
+    この index 0 固定を見直すこと）。
+    """
+    global _data_source_id
+    if _data_source_id:
+        return _data_source_id
+
+    env_id = settings.notion_data_source_id
+    if env_id:
+        _data_source_id = env_id
+        return _data_source_id
+
+    _throttle()
+    db = _get_client().databases.retrieve(database_id=settings.notion_database_id_design_task)
+    sources = db.get("data_sources", [])
+    if not sources:
+        raise RuntimeError(
+            "設計タスク管理 DB に data_sources がありません（Notion-Version 2025-09-03 を期待）"
+        )
+    _data_source_id = sources[0]["id"]
+    logger.info("[NOTION] resolved data_source_id=%s (name=%s)", _data_source_id, sources[0].get("name"))
+    return _data_source_id
 
 
 def _title_text(page: dict) -> str:
@@ -73,7 +106,7 @@ def write_task(
 
     _throttle()
     page = _get_client().pages.create(
-        parent={"database_id": settings.notion_database_id_design_task},
+        parent={"type": "data_source_id", "data_source_id": _get_data_source_id()},
         properties=properties,
     )
     logger.info("[NOTION] created task '%s' (page=%s)", title, page["id"])
@@ -122,19 +155,20 @@ def list_cases(days: int = 90) -> list[dict]:
     """
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     query_filter = {"timestamp": "last_edited_time", "last_edited_time": {"on_or_after": since}}
+    data_source_id = _get_data_source_id()
 
     agg: dict[str, dict] = {}
     cursor: str | None = None
     while True:
         kwargs = {
-            "database_id": settings.notion_database_id_design_task,
+            "data_source_id": data_source_id,
             "filter": query_filter,
             "page_size": 100,
         }
         if cursor:
             kwargs["start_cursor"] = cursor
         _throttle()
-        resp = _get_client().databases.query(**kwargs)
+        resp = _get_client().data_sources.query(**kwargs)
 
         for page in resp.get("results", []):
             case_name = _title_text(page)

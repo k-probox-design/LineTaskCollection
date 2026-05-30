@@ -27,6 +27,11 @@ class _Settings:
         return os.environ.get("NOTION_DATABASE_ID_DESIGN_TASK", "")
 
     @property
+    def notion_data_source_id(self) -> str:
+        # 任意。未設定なら notion_writer が databases.retrieve で自動解決する（Notion 2025-09-03）
+        return os.environ.get("NOTION_DATA_SOURCE_ID", "")
+
+    @property
     def gcs_bucket(self) -> str:
         return os.environ.get("GCS_BUCKET", "probox-linetask-prod-intake")
 
