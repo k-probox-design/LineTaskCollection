@@ -1,14 +1,18 @@
 import json
+import os
 import sys
 import tempfile
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import typer
 
-from app import config, folders, mounts, notion_writer, pull, sharepoint_writer
+from app import config, folders, mounts, notion_writer, pull, results_export, sharepoint_writer
 from app.config import settings
+
+# 実績 HTML の既定出力先（Windows パス。winpath 解決を通してから書く）
+DEFAULT_RESULTS_HTML = r"C:\Users\knaka\OneDrive - 株式会社ビギン\@@設計\51.LINE投稿ボット\LINE仕分け実績.html"
 
 app = typer.Typer(add_completion=False, help="LineTask pc_cli — GCS/Notion/SharePoint の薄い API ラッパー")
 
@@ -87,12 +91,16 @@ def write_task_cmd(
     note: str = typer.Option(None, "--note"),
     onedrive_link: str = typer.Option(None, "--onedrive-link"),
     assignee_user_id: str = typer.Option(None, "--assignee-user-id", help="担当(person)。既定は NOTION_DEFAULT_ASSIGNEE_USER_ID"),
+    file_name: str = typer.Option(None, "--file-name", help="実ファイル名。備考に『ファイル: …』で機械可読に残す（実績HTMLが消費）"),
+    confidence: str = typer.Option(None, "--confidence", help="確信度。備考に『確信度: …』で残す"),
     log_run_id: str = typer.Option(None, "--log-run-id"),
 ) -> None:
     """Notion に新規タスク row を追加。担当・既定優先度で人別ビューに乗せる。"""
     _init_logging(log_run_id)
     try:
-        result = notion_writer.write_task(case, title, priority, note, onedrive_link, assignee_user_id)
+        result = notion_writer.write_task(
+            case, title, priority, note, onedrive_link, assignee_user_id, file_name, confidence
+        )
     except Exception as e:
         _fail("write-task failed", str(e))
     _emit(result)
@@ -234,6 +242,43 @@ def list_messages_cmd(
     except Exception as e:
         _fail("list-messages failed", str(e))
     _emit(items)
+
+
+@app.command("export-results-html")
+def export_results_html_cmd(
+    out: str = typer.Option(DEFAULT_RESULTS_HTML, "--out", help="出力先（Windows パス可）。既定=51.LINE投稿ボット直下の LINE仕分け実績.html"),
+    log_run_id: str = typer.Option(None, "--log-run-id"),
+) -> None:
+    """Notion の【LINE】タスクを唯一の真実として実績 HTML をまるごと再生成（決定的・上書き）。
+
+    Notion だけを読み、OneDrive へは書くだけ（未ハイドレートの罠を避ける）。Notion 失敗時は
+    既存ファイルを壊さない（一時ファイルに書いて atomically rename）。
+    """
+    _init_logging(log_run_id)
+    out_unix = mounts.resolve_to_unix(out, settings.path_maps)
+    try:
+        pages = notion_writer.list_line_tasks()
+    except Exception as e:
+        _fail("export-results-html failed", str(e))
+    rows = results_export.build_rows(pages)
+    jst_now = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M") + " JST"
+    html = results_export.render_html(rows, jst_now)
+
+    out_path = Path(out_unix)
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out_path.with_name(out_path.name + ".tmp")
+        tmp.write_text(html, encoding="utf-8")
+        os.replace(tmp, out_path)  # atomically 置換（途中失敗で既存を壊さない）
+    except OSError as e:
+        _fail("export-results-html write failed", str(e))
+
+    _emit({
+        "out_unix": str(out_path),
+        "out_windows": config.to_windows(str(out_path)),
+        "count": len(rows),
+        "generated_at": jst_now,
+    })
 
 
 @app.command("mark-done")

@@ -310,3 +310,23 @@ list-messages --group-id <gid> [--around-doc <doc_id> | --since <iso> --until <i
 - **担当**(person 型): `write-task` が `NOTION_DEFAULT_ASSIGNEE_USER_ID`（けいすけ user_id `1b2d872b-594c-81ad-a589-00021d50994d`）を自動セットして人別ビューに乗せる。`--assignee-user-id` で個別指定も可。未設定だと作成者＝LineTaskBot になり人別グループから外れる。
 - 完了の表現は status 型プロパティ **`ステータス`**（option: `未着手 / 情報待ち / 進行中 / 依頼中 / 中断中 / 中村確認待 / 修正依頼済 / 社内確認待 / レイアウト完了 / 不要 / 完了`、既定 `未着手`）。`update-task --status <値>`。
 - **宿題（けいすけ）**: 仕分け/完了の状態管理を「優先度（Claude追記→本来値）」と「ステータス（→完了）」のどちらで回すか、mark-done 後の Notion 更新方針が未確定。決まり次第 Cowork へ通知される。
+
+## 8. 実績 HTML の生成（export-results-html、2026-05-31）
+
+定期実行の最後に **決定的コマンド** `export-results-html` を 1 回叩き、ブックマーク用の静的 HTML
+`…\51.LINE投稿ボット\LINE仕分け実績.html` を Notion からまるごと再生成する（LLM 判断なし）。
+
+```
+python -m app.cli export-results-html      # 既定 out に上書き（--out で変更可、Windows パス可）
+```
+
+- **Notion『設計タスク管理』の【LINE】タスクが唯一の真実**。既存 HTML は読まない（OneDrive 未ハイドレートの罠回避）。Notion 失敗時は exit!=0 で既存ファイルを壊さない（atomic rename）。
+- そのため **`write-task` 時に実ファイル名・確信度を備考へ機械可読に残す**こと（HTML が Notion だけから復元できるように）。`write-task --file-name "<実ファイル名>" --confidence "<確信度>"` を渡すと備考が次の書式になる:
+  ```
+  案件: 三和鶏園 姫路農場
+  ファイル: 2026-05-30 提案01図面 三和鶏園姫路農場 野立て147.68kw.pdf
+  確信度: 高
+  groupId: Cd42d2bcf838ae883edd71ac4cee84ab7   ← 従来どおり --note 等で備考に含める
+  ```
+  needs_review（仕分け待ち）は案件・ファイル未確定なので `--file-name`/`--confidence` は省略可（HTML 側は空なら「—」表示）。
+- SKILL.md の末尾とスケジュール 4 本の prompt に「最後に `export-results-html` を 1 回」を追記する（Cowork 宿題）。
