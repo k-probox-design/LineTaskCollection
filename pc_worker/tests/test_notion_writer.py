@@ -129,6 +129,33 @@ def test_update_task_sets_assignee():
     assert props["担当"] == {"people": [{"object": "user", "id": "U-keisuke"}]}
 
 
+def test_write_task_note_includes_file_and_confidence(monkeypatch):
+    monkeypatch.delenv("NOTION_DEFAULT_ASSIGNEE_USER_ID", raising=False)
+    client = _client_with_data_source()
+    client.pages.create.return_value = {"id": "p", "url": "u"}
+    with patch("app.notion_writer._get_client", return_value=client):
+        write_task(case="三和鶏園", title="t", note="groupId: Cabc",
+                   file_name="2026-05-30 図面.pdf", confidence="高")
+    note = client.pages.create.call_args.kwargs["properties"]["備考"]["rich_text"][0]["text"]["content"]
+    assert "案件: 三和鶏園" in note
+    assert "ファイル: 2026-05-30 図面.pdf" in note
+    assert "確信度: 高" in note
+    assert "groupId: Cabc" in note
+
+
+def test_list_line_tasks_filters_by_prefix_and_paginates():
+    client = _client_with_data_source()
+    client.data_sources.query.side_effect = [
+        {"results": [{"id": "a"}], "has_more": True, "next_cursor": "cur"},
+        {"results": [{"id": "b"}], "has_more": False},
+    ]
+    with patch("app.notion_writer._get_client", return_value=client):
+        pages = notion_writer.list_line_tasks()
+    assert [p["id"] for p in pages] == ["a", "b"]  # 2 ページ分を連結
+    first_filter = client.data_sources.query.call_args_list[0].kwargs["filter"]
+    assert first_filter == {"property": "タスク名", "title": {"starts_with": "【LINE】"}}
+
+
 def test_update_task_sets_status_property():
     # 完了化は status 型「ステータス」で（優先度に "通常" は無い）
     client = MagicMock()

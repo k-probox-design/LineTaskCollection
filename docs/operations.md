@@ -272,7 +272,7 @@ python -m app.cli <subcommand> [options]
 
 stdout は結果 JSON のみ、ログは stderr（+ `LOG_OUTPUT_DIR` ファイル）に出る。エラー時は exit code != 0 で stderr に `{"error": "...", "detail": "..."}`。
 
-### サブコマンド一覧（11 個）
+### サブコマンド一覧（12 個）
 
 | サブコマンド | 役割 |
 |------------|------|
@@ -281,12 +281,13 @@ stdout は結果 JSON のみ、ログは stderr（+ `LOG_OUTPUT_DIR` ファイ�
 | `list-cases [--days=90]` | Notion から直近 N 日更新の案件名候補を出力 |
 | `list-case-folders [--root] [--max-depth=3] [--query <名前片>]` | 配下を再帰スキャン。`--root`/`--query` 可（`--root` は Windows パス可）。**2 段スコープ推奨**: `--max-depth 1` でブランチ列挙→`--root <branch> --query <案件>`（@@@ 全走査はマウントが遅く非推奨）|
 | `list-messages --group-id [--around-doc \| --since --until] [--window-hours=48] [--limit=200]` | 同一グループの前後メッセージを時系列で返す（議事ログ素材。関連判断は Cowork）|
-| `write-task --case --title [--priority] [--note] [--onedrive-link] [--assignee-user-id]` | Notion 新規 row。既定優先度 `Claude追記`（`NOTION_DEFAULT_PRIORITY`）、担当に `NOTION_DEFAULT_ASSIGNEE_USER_ID` をセット（人別ビュー対応）|
+| `write-task --case --title [--priority] [--note] [--onedrive-link] [--assignee-user-id] [--file-name] [--confidence]` | Notion 新規 row。既定優先度 `Claude追記`、担当に `NOTION_DEFAULT_ASSIGNEE_USER_ID`。`--file-name`/`--confidence` は備考に `ファイル:`/`確信度:` 行で機械可読に残す（実績HTMLが消費）|
 | `update-task --page-id [--case --title --priority --status --note --onedrive-link --assignee-user-id]` | Notion 部分更新。**完了化は `--status 完了`（status 型「ステータス」）**。優先度に "通常" は無い |
 | `place-file --src --case-folder --title [--date]` | 案件フォルダ配下の 09.LINEやりとり資料/ に配置。`--case-folder`/`--src` は Windows パス可（実行時に実マウントへ解決、bug1）|
 | `write-log --case-folder --date --content [--filename]` | 議事ログを 09.LINEやりとり資料/ に書き込み（上書き、`--content -` で stdin）。既定名 `<date> 議事ログ.md`、`--filename` で HTML 等の任意名 |
 | `mark-done <doc_id>` | Firestore done + GCS 削除 |
 | `mark-review <doc_id> [--reason]` | Firestore needs_review、GCS 保持 |
+| `export-results-html [--out]` | Notion の【LINE】タスクを唯一の真実に実績 HTML をまるごと再生成（決定的・上書き・atomic）。既定 out=`…\51.LINE投稿ボット\LINE仕分け実績.html`。LLM 判断なし、Notion だけ読み OneDrive へは書くだけ |
 
 全サブコマンドに `--log-run-id=<外部ID>` オプションがあり、Cowork 側から共通 run_id を渡して同一仕分けセッションのログを束ねられる。
 

@@ -70,7 +70,51 @@ def test_write_task_passes_args():
     assert result.exit_code == 0
     assert _stdout_json(result)["page_id"] == "p"
     # priority/assignee 未指定は None で渡し、既定解決は notion_writer 側（既定優先度 Claude追記 / 担当 env）
-    m.assert_called_once_with("佐藤邸", "見積", None, "n", None, None)
+    m.assert_called_once_with("佐藤邸", "見積", None, "n", None, None, None, None)
+
+
+def test_write_task_passes_file_and_confidence():
+    with patch("app.cli.notion_writer.write_task", return_value={"page_id": "p", "url": "u"}) as m:
+        result = runner.invoke(app, [
+            "write-task", "--case", "A", "--title", "t",
+            "--file-name", "f.pdf", "--confidence", "高",
+        ])
+    assert result.exit_code == 0
+    # 引数順: case,title,priority,note,onedrive_link,assignee_user_id,file_name,confidence
+    assert m.call_args.args == ("A", "t", None, None, None, None, "f.pdf", "高")
+
+
+def test_export_results_html_writes_file(tmp_path):
+    page = {
+        "id": "p1",
+        "properties": {
+            "タスク名": {"title": [{"plain_text": "【LINE】2026-05-30 見積"}]},
+            "備考": {"rich_text": [{"plain_text": "案件: 佐藤邸\ngroupId: Cabc"}]},
+            "ステータス": {"status": {"name": "未着手"}},
+            "優先度": {"select": {"name": "Claude追記"}},
+            "OneDrive": {"url": None},
+        },
+    }
+    out = tmp_path / "LINE仕分け実績.html"
+    with patch("app.cli.notion_writer.list_line_tasks", return_value=[page]):
+        result = runner.invoke(app, ["export-results-html", "--out", str(out)])
+    assert result.exit_code == 0
+    data = _stdout_json(result)
+    assert data["count"] == 1
+    assert out.exists()
+    content = out.read_text(encoding="utf-8")
+    assert 'id="data"' in content
+    assert "★" not in content  # マーカー置換済み
+
+
+def test_export_results_html_notion_error_keeps_file(tmp_path):
+    out = tmp_path / "x.html"
+    out.write_text("EXISTING", encoding="utf-8")
+    with patch("app.cli.notion_writer.list_line_tasks", side_effect=RuntimeError("notion down")):
+        result = runner.invoke(app, ["export-results-html", "--out", str(out)])
+    assert result.exit_code != 0
+    assert _stderr_json(result)["error"] == "export-results-html failed"
+    assert out.read_text(encoding="utf-8") == "EXISTING"  # 既存ファイルを壊さない
 
 
 def test_write_task_passes_assignee():
@@ -80,7 +124,7 @@ def test_write_task_passes_assignee():
             "--priority", "高", "--assignee-user-id", "U-keisuke",
         ])
     assert result.exit_code == 0
-    assert m.call_args.args == ("A", "t", "高", None, None, "U-keisuke")
+    assert m.call_args.args == ("A", "t", "高", None, None, "U-keisuke", None, None)
 
 
 def test_update_task_passes_priority():

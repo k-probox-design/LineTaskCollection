@@ -17,7 +17,10 @@ PROP_STATUS = "ステータス"
 PROP_ASSIGNEE = "担当"
 PROP_NOTE = "備考"
 PROP_ONEDRIVE = "OneDrive"
+PROP_DATE_REGISTERED = "タスク登録日"
+PROP_DATE = "日付"
 PRIORITY_PENDING = "仕分け待ち"
+LINE_TASK_PREFIX = "【LINE】"
 # 実 DB 確認(2026-05-30): 優先度 options = 仕分け待ち/すぐ/高/中/低/趣味（"通常" は無い）。
 # 完了化は優先度ではなく status 型プロパティ「ステータス」(完了/不要/レイアウト完了/…) で行う。
 
@@ -83,11 +86,26 @@ def _title_text(page: dict) -> str:
     return "".join(part.get("plain_text", "") for part in title_prop).strip()
 
 
-def _compose_note(case: str | None, note: str | None) -> str:
-    text = note or ""
+def _compose_note(
+    case: str | None,
+    note: str | None,
+    file_name: str | None = None,
+    confidence: str | None = None,
+) -> str:
+    """備考テキストを機械可読な行で組み立てる（export-results-html のパーサと整合）。
+
+    並び: 案件 / ファイル / 確信度 / <自由記述 note（groupId 等を含む）>。
+    """
+    lines: list[str] = []
     if case:
-        text = f"案件: {case}\n{text}".strip()
-    return text
+        lines.append(f"案件: {case}")
+    if file_name:
+        lines.append(f"ファイル: {file_name}")
+    if confidence:
+        lines.append(f"確信度: {confidence}")
+    if note:
+        lines.append(note)
+    return "\n".join(lines).strip()
 
 
 def write_task(
@@ -97,6 +115,8 @@ def write_task(
     note: str | None = None,
     onedrive_link: str | None = None,
     assignee_user_id: str | None = None,
+    file_name: str | None = None,
+    confidence: str | None = None,
 ) -> dict:
     """設計タスク管理 DB に row を新規作成。案件名は備考に記録する（案件プロパティは実 DB 未確認のため）。
 
@@ -113,7 +133,7 @@ def write_task(
     }
     if eff_assignee:
         properties[PROP_ASSIGNEE] = {"people": [{"object": "user", "id": eff_assignee}]}
-    note_text = _compose_note(case, note)
+    note_text = _compose_note(case, note, file_name, confidence)
     if note_text:
         properties[PROP_NOTE] = {"rich_text": [{"text": {"content": note_text}}]}
     if onedrive_link:
@@ -211,3 +231,30 @@ def list_cases(days: int = 90) -> list[dict]:
     cases = sorted(agg.values(), key=lambda c: c["last_updated"], reverse=True)
     logger.info("[NOTION] list_cases returned %d cases (days=%d)", len(cases), days)
     return cases
+
+
+def list_line_tasks() -> list[dict]:
+    """タスク名が【LINE】で始まるページを全件（ページング込み）取得し、生ページを返す。
+
+    needs_review の「仕分け待ち」row も含める（けいすけが未処理も一覧したいため）。
+    行データへの変換は results_export.build_rows が担う。
+    """
+    data_source_id = _get_data_source_id()
+    query_filter = {"property": PROP_TITLE, "title": {"starts_with": LINE_TASK_PREFIX}}
+
+    pages: list[dict] = []
+    cursor: str | None = None
+    while True:
+        kwargs: dict = {"data_source_id": data_source_id, "filter": query_filter, "page_size": 100}
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        _throttle()
+        resp = _get_client().data_sources.query(**kwargs)
+        pages.extend(resp.get("results", []))
+        if resp.get("has_more"):
+            cursor = resp.get("next_cursor")
+        else:
+            break
+
+    logger.info("[NOTION] list_line_tasks returned %d pages", len(pages))
+    return pages

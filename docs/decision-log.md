@@ -296,3 +296,25 @@ D-1 同様 **Cloud Run 再デプロイで反映**（デプロイ後の受信ぶ�
 ### 運用メモ
 - gcloud は git-bash の MSYS パス変換で `/home/...`→`C:/Program Files/Git/...` に化け失敗することがある → **gcloud は PowerShell ツール経由で wsl 実行**、`CLOUDSDK_PYTHON` を bundled python に固定。
 - 再デプロイ（main マージ＋タグ＋deploy）はけいすけ明示確認後。
+
+## 2026-05-31 — 実績 HTML 生成 `export-results-html`（決定的・Notion を唯一の真実）
+
+定期実行のたびにブックマーク用静的 HTML `…\51.LINE投稿ボット\LINE仕分け実績.html` を最新化。LLM 判断を介さない決定的コマンドで実装（けいすけ確定）。
+
+- **方式**: Notion『設計タスク管理』の【LINE】タスクを毎回まるごと取得 → 行データ化 → 固定テンプレ HTML の「データ部 JSON」と「生成日時」だけ差し替えて上書き。既存 HTML は読まない（OneDrive 未ハイドレートの罠回避＝読むのは Notion だけ、OneDrive へは書くだけ）。
+- `app/results_export.py` 新設（`build_rows` / `render_html`、テンプレは指示のものをバイト等価で保持）。`<` を `<` に逃がして `</script>` ブレイクアウト防止。
+- `notion_writer.list_line_tasks()`（タスク名が【LINE】で始まるページを全件・ページング込み取得）追加。
+- cli `export-results-html [--out]`: `--out` は `mounts.resolve_to_unix`（winpath）を通す。一時ファイル→`os.replace` で atomic 上書き、Notion 失敗時は既存を壊さない。
+- **write-task 小改修**: `--file-name` / `--confidence` を追加し備考に `ファイル:` / `確信度:` 行で機械可読保存（HTML を Notion だけから復元可能に）。`_compose_note` を 案件/ファイル/確信度/自由note の順に。
+- pc_worker テスト 91→**102 pass**（results_export の行ビルド/HTML 妥当性/`<` エスケープ、export cli、write-task 備考、list_line_tasks ページング）。
+- Skill/スケジュールへの export ステップ追記は Cowork 宿題。main マージ＋タグはけいすけ確認後。
+
+### export-results-html 実データ頑健化（2026-05-31 追加）
+
+実機で既存6行の fname/conf/gid/folder がほぼ空になった（実 Notion 備考が独立行でなくインライン `key=value`、ファイル名は OneDrive プロパティのパス末尾にある）。抽出を頑健化:
+- gid `groupId\s*[=:：]\s*(C[0-9a-fA-F]{32})`、直後 `(部屋名)` を `room_name` に。conf `確信度\s*[=:：]\s*([^\s。/、（(<]+)`。
+- fname: 備考『ファイル:』行（最優先）→ OneDrive 末尾が拡張子付きなら basename → 空。
+- folder: OneDrive が http(s) のときだけ 09 フォルダ URL を導出（ファイル URL は親、フォルダ URL はそのまま、末尾が 09 でなければ付加）。**`%20` をデコードして生スペースで保持**（テンプレ `encodeURI` での二重エンコード回避）。ローカルパスは空。
+- case は備考『案件:』行（trim・全角スペース→半角のみ）。
+- `room_name` を行データに追加（テンプレ表示は未対応＝Cowork 後日、gid フォールバック維持）。
+- テストに実データ由来の例A（ローカル/インライン）・例B（SharePoint フォルダURL・部屋名・%20）・ファイルURL親・新書式優先・二重エンコード非発生を追加。pc_worker 102→**106 pass**。
