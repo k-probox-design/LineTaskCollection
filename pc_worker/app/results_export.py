@@ -6,6 +6,7 @@ Notion の【LINE】タスクページ群 → §3 行スキーマ → テンプ�
 
 import json
 import re
+from urllib.parse import unquote
 
 from app.notion_writer import (
     LINE_TASK_PREFIX,
@@ -20,16 +21,62 @@ from app.notion_writer import (
 
 _GEN_MARKER = "★ここを生成日時に差し替え★"
 _DATA_MARKER = "★ここに §3 の行配列 JSON を差し込む★"
+LINE_SUBFOLDER = "09.LINEやりとり資料"
+
+# 実データの備考は独立行でなく key=value のインライン（<br>・スラッシュ・句点区切り）。
+# `=` と `:`（半角/全角）両対応で抽出する（2026-05-31 頑健化）。
+_CASE_RE = re.compile(r"案件\s*[:：]\s*(.+?)(?:<br>|\n|$)")
+_GID_RE = re.compile(r"groupId\s*[=:：]\s*(C[0-9a-fA-F]{32})")
+_GID_ROOM_RE = re.compile(r"groupId\s*[=:：]\s*C[0-9a-fA-F]{32}\s*[(（]([^)）]+)[)）]")
+_CONF_RE = re.compile(r"確信度\s*[=:：]\s*([^\s。/、（(<]+)")
+_FILE_LINE_RE = re.compile(r"ファイル\s*[:=：]\s*(.+?)(?:<br>|\n|$)")
+_EXT_RE = re.compile(r"\.[A-Za-z0-9]{1,8}$")
 
 
 def _plain(rich: list) -> str:
     return "".join(part.get("plain_text", "") for part in (rich or [])).strip()
 
 
-def _note_field(note: str, label: str) -> str:
-    """備考から `<label>: 値` 行を抜き出す（半角/全角コロン許容）。無ければ空文字。"""
-    m = re.search(rf"^{re.escape(label)}[:：]\s*(.+)$", note, re.MULTILINE)
+def _search1(rx: re.Pattern, note: str) -> str:
+    m = rx.search(note)
     return m.group(1).strip() if m else ""
+
+
+def _basename(path: str) -> str:
+    return re.split(r"[\\/]", path.rstrip("/\\"))[-1]
+
+
+def _has_ext(name: str) -> bool:
+    return bool(_EXT_RE.search(name))
+
+
+def _derive_fname(note: str, onedrive: str) -> str:
+    """fname 決定: ①備考の『ファイル:』行 → ②OneDrive 末尾が拡張子付きならその basename → ③空。"""
+    line = _search1(_FILE_LINE_RE, note)
+    if line:
+        return line
+    base = _basename(unquote(onedrive)) if onedrive else ""
+    return base if _has_ext(base) else ""
+
+
+def _derive_folder(onedrive: str) -> str:
+    """09.LINEやりとり資料 フォルダの SharePoint URL を導出（生スペース＝未エンコードで返す）。
+
+    http(s) のみ対象（ローカルパスは機械変換不可＝空）。ファイル URL は親、フォルダ URL はそのまま。
+    末尾が 09 フォルダでなければ付加。テンプレが encodeURI するので `%20` でなく生スペースで持つ。
+    """
+    if not onedrive.startswith(("http://", "https://")):
+        return ""
+    url = unquote(onedrive).rstrip("/")
+    if _has_ext(_basename(url)):
+        url = url.rsplit("/", 1)[0]  # ファイル URL → 親フォルダ
+    if LINE_SUBFOLDER not in url.split("/"):
+        url = url + "/" + LINE_SUBFOLDER
+    return url
+
+
+def _norm_case(s: str) -> str:
+    return s.replace("　", " ").strip()
 
 
 def _date_value(props: dict, key: str) -> str:
@@ -56,30 +103,35 @@ def _notion_url(page_id: str) -> str:
 
 
 def build_rows(pages: list[dict]) -> list[dict]:
-    """Notion ページ群を §3 の行スキーマ（テンプレ JS が消費するキー）に変換する。"""
+    """Notion ページ群を §3 の行スキーマ（テンプレ JS が消費するキー）に変換する。
+
+    独立行ではなく実データのインライン（key=value）にも頑健に対応し、fname/folder は
+    OneDrive プロパティから導出する。folder/fname は未エンコードの生文字列で持つ
+    （テンプレが encodeURI するため二重エンコードを避ける）。
+    """
     rows: list[dict] = []
     for page in pages:
         props = page.get("properties", {})
         title = _plain(props.get(PROP_TITLE, {}).get("title", []))
         note = _plain(props.get(PROP_NOTE, {}).get("rich_text", []))
+        onedrive = props.get(PROP_ONEDRIVE, {}).get("url") or ""
 
         status = (props.get(PROP_STATUS, {}).get("status") or {}).get("name", "") or ""
         pri = (props.get(PROP_PRIORITY, {}).get("select") or {}).get("name", "") or ""
-        onedrive = props.get(PROP_ONEDRIVE, {}).get("url") or ""
-        folder = onedrive if onedrive.startswith(("http://", "https://")) else ""
         date = _date_value(props, PROP_DATE_REGISTERED) or _date_value(props, PROP_DATE)
 
         rows.append({
             "date": date,
-            "case": _note_field(note, "案件"),
+            "case": _norm_case(_search1(_CASE_RE, note)),
             "file": _strip_title(title),
-            "fname": _note_field(note, "ファイル"),
-            "folder": folder,
+            "fname": _derive_fname(note, onedrive),
+            "folder": _derive_folder(onedrive),
             "status": status,
             "pri": pri,
             "link": _notion_url(page.get("id", "")),
-            "gid": _note_field(note, "groupId"),
-            "conf": _note_field(note, "確信度"),
+            "gid": _search1(_GID_RE, note),
+            "conf": _search1(_CONF_RE, note),
+            "room_name": _search1(_GID_ROOM_RE, note),
         })
     return rows
 
