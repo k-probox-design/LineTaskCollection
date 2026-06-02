@@ -86,14 +86,29 @@ def _date_value(props: dict, key: str) -> str:
     return ""
 
 
+_TRAIL_DATE_RE = re.compile(r"\s*[(（](?:\d{4}[-/])?\d{1,2}[-/]\d{1,2}[)）]\s*$")
+
+
 def _strip_title(title: str) -> str:
-    """タスク名から先頭の【LINE】と日付プレフィックスを除いた表示用タイトル。"""
+    """タスク名から表示用タイトル（ファイル列）を作る。新旧両形式に対応。
+
+    新: 【LINE】<案件名> ｜[種別] <内容> (MM-DD)  → [種別] <内容>
+    旧: 【LINE】YYYY-MM-DD <内容>              → <内容>
+    案件名スロットは隣の「案件」列と重複するので除去し、[種別] タグは残す。
+    """
     t = title
     if t.startswith(LINE_TASK_PREFIX):
         t = t[len(LINE_TASK_PREFIX):]
     t = t.strip()
-    m = re.match(r"^\d{4}-\d{2}-\d{2}\s+(.*)$", t)
-    return m.group(1).strip() if m else t
+    fallback = t
+    if "｜" in t:
+        t = t.split("｜", 1)[1].strip()  # 最初の ｜ より後ろ＝案件名プレフィックス除去
+    else:
+        m = re.match(r"^\d{4}-\d{2}-\d{2}\s+(.*)$", t)  # 旧形式: 先頭の受信日を剥がす
+        if m:
+            t = m.group(1).strip()
+    t = _TRAIL_DATE_RE.sub("", t).strip()  # 末尾の (MM-DD)/(YYYY-MM-DD) を除去
+    return t or fallback
 
 
 def _notion_url(page_id: str) -> str:

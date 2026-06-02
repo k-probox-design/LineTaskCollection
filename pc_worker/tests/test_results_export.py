@@ -122,6 +122,48 @@ def test_build_rows_date_falls_back_to_hizuke():
     assert row["date"] == "2026-05-29"
 
 
+def test_strip_title_new_and_old_formats():
+    s = results_export._strip_title
+    # 新・確定: 案件名スロット除去・末尾 (MM-DD) 除去・[種別] は残す
+    assert s("【LINE】三和鶏園姫路農場 ｜[図面] 単線結線図 売電用WHメーター追加 (05-31)") == \
+        "[図面] 単線結線図 売電用WHメーター追加"
+    # 新・要振り分け
+    assert s("【LINE】（要振り分け） ｜[写真] 受変電盤メーター採寸写真 (06-01)") == \
+        "[写真] 受変電盤メーター採寸写真"
+    # 旧（後方互換）: 先頭の YYYY-MM-DD を剥がす
+    assert s("【LINE】2026-05-31 単線結線図 売電用WHメーター追加") == "単線結線図 売電用WHメーター追加"
+    # ｜ も日付も無い変則
+    assert s("【LINE】何か") == "何か"
+    # 末尾が (YYYY-MM-DD)・全角括弧でも除去
+    assert s("【LINE】A社 ｜[見積] 御見積書 （2026-06-01）") == "[見積] 御見積書"
+    # 空フォールバック: 剥がすと空になるなら剥がす前を返す
+    assert s("【LINE】 ｜ (05-31)") == "｜ (05-31)"
+
+
+def test_build_rows_new_title_with_onedrive_log_html():
+    # OneDrive が議事ログ.html（ファイルURL）でも folder=09フォルダ・fname=備考の『ファイル:』由来。
+    # ファイル単体URLは備考の『ファイルURL:』行に移ったが既存抽出を壊さないこと。
+    onedrive = ("https://begin419671.sharepoint.com/sites/Kenes/Shared%20Documents/"
+                "Kenes_見積もり案件/2025年作成/兵庫県_三和鶏園_姫路農場_様/"
+                "09.LINEやりとり資料/議事ログ.html")
+    note = ("案件: 三和鶏園姫路農場<br>ファイル: 提案01図面.pdf<br>確信度: 高<br>"
+            "ファイルURL: https://begin419671.sharepoint.com/sites/Kenes/Shared%20Documents/"
+            "案件/09.LINEやりとり資料/提案01図面.pdf<br>"
+            f"groupId={_GID_A}(【社内】産業用図面)")
+    title = "【LINE】三和鶏園姫路農場 ｜[図面] 提案01図面 (05-31)"
+    row = results_export.build_rows([_page("p", title, note=note, onedrive=onedrive)])[0]
+    # 議事ログ.html の親（09 フォルダ）が folder。生スペース・二重エンコード無し
+    assert row["folder"] == ("https://begin419671.sharepoint.com/sites/Kenes/Shared Documents/"
+                             "Kenes_見積もり案件/2025年作成/兵庫県_三和鶏園_姫路農場_様/09.LINEやりとり資料")
+    assert "%2520" not in row["folder"] and "%20" not in row["folder"]
+    assert row["fname"] == "提案01図面.pdf"  # 備考の『ファイル:』由来（OneDrive が html でも不変）
+    assert row["file"] == "[図面] 提案01図面"  # 案件名重複なし・[種別] 残す
+    assert row["case"] == "三和鶏園姫路農場"
+    assert row["conf"] == "高"  # ファイルURL: 行があっても既存抽出が壊れない
+    assert row["gid"] == _GID_A
+    assert row["room_name"] == "【社内】産業用図面"
+
+
 def test_render_html_replaces_markers_and_valid_json():
     rows = [{"date": "2026-05-30", "case": "C", "file": "F", "fname": "f.pdf",
              "folder": "https://x/y", "status": "未着手", "pri": "Claude追記",
