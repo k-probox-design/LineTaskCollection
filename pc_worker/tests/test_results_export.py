@@ -76,6 +76,7 @@ def test_build_rows_real_example_A_local_path_inline_note():
 
 def test_build_rows_real_example_B_sharepoint_folder_url():
     # 例B: SharePoint フォルダURL（案件フォルダ止まり・%20）＋ インライン groupId=…(部屋名)
+    # 拡張子が無いフォルダ URL はそのまま folder（09 自動付加は撤廃、2026-06-07）。
     onedrive = ("https://begin419671.sharepoint.com/sites/Kenes/Shared%20Documents/"
                 "Kenes_見積もり案件/2025年作成/兵庫県_三和鶏園_姫路農場_様")
     note = ("案件: 三和鶏園姫路農場<br>[Claude推測] 案件=三和鶏園 姫路農場（…）/確信度=高（…）/判断理由=…/"
@@ -85,10 +86,34 @@ def test_build_rows_real_example_B_sharepoint_folder_url():
     assert row["conf"] == "高"
     assert row["room_name"] == "【社内】産業用図面"
     assert row["fname"] == ""  # フォルダ止まり＝多ファイル
-    # %20 はデコードして生スペース、末尾に 09 フォルダを付加
+    # %20 はデコードして生スペース、フォルダ URL はそのまま（09 を勝手に足さない）
     assert row["folder"] == ("https://begin419671.sharepoint.com/sites/Kenes/Shared Documents/"
-                             "Kenes_見積もり案件/2025年作成/兵庫県_三和鶏園_姫路農場_様/09.LINEやりとり資料")
+                             "Kenes_見積もり案件/2025年作成/兵庫県_三和鶏園_姫路農場_様")
     assert "%2520" not in row["folder"] and "%20" not in row["folder"]  # 二重/未デコードでない
+
+
+def test_build_rows_onedrive_personal_log_html_new_layout():
+    # 新方式: 個人 OneDrive の LINE資料/<案件名>/議事ログ.html → folder は親（案件名直下、09 無し）
+    onedrive = ("https://begin419671-my.sharepoint.com/personal/k_nakamura_begin-e_co_jp/"
+                "Documents/@@設計/51.LINE投稿ボット/LINE資料/佐藤邸 新築/議事ログ.html")
+    note = "案件: 佐藤邸 新築\nファイル: 2026-06-07 見積書.pdf\n確信度: 高"
+    row = results_export.build_rows([_page("p", "【LINE】佐藤邸 新築 ｜[見積] 見積書 (06-07)",
+                                           note=note, onedrive=onedrive)])[0]
+    # 09 を付加せず案件名フォルダで止まる（新レイアウトは直下配置）
+    assert row["folder"] == ("https://begin419671-my.sharepoint.com/personal/k_nakamura_begin-e_co_jp/"
+                             "Documents/@@設計/51.LINE投稿ボット/LINE資料/佐藤邸 新築")
+    assert row["fname"] == "2026-06-07 見積書.pdf"
+    assert "%2520" not in row["folder"] and "%20" not in row["folder"]
+    # JS: fileUrl = folder + "/" + fname、logUrl = folder + "/議事ログ.html" が正しく組める
+    assert row["folder"] + "/議事ログ.html" == (
+        "https://begin419671-my.sharepoint.com/personal/k_nakamura_begin-e_co_jp/"
+        "Documents/@@設計/51.LINE投稿ボット/LINE資料/佐藤邸 新築/議事ログ.html")
+
+
+def test_derive_folder_legacy_folder_url_with_09_kept():
+    # レガシー: 拡張子なし・09 を含むフォルダ URL → そのまま（親へ降りない）
+    url = "https://x/sites/y/案件A/09.LINEやりとり資料"
+    assert results_export._derive_folder(url) == "https://x/sites/y/案件A/09.LINEやりとり資料"
 
 
 def test_build_rows_file_url_uses_parent_as_folder():

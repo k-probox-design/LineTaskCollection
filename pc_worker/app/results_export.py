@@ -21,7 +21,6 @@ from app.notion_writer import (
 
 _GEN_MARKER = "★ここを生成日時に差し替え★"
 _DATA_MARKER = "★ここに §3 の行配列 JSON を差し込む★"
-LINE_SUBFOLDER = "09.LINEやりとり資料"
 
 # 実データの備考は独立行でなく key=value のインライン（<br>・スラッシュ・句点区切り）。
 # `=` と `:`（半角/全角）両対応で抽出する（2026-05-31 頑健化）。
@@ -60,18 +59,21 @@ def _derive_fname(note: str, onedrive: str) -> str:
 
 
 def _derive_folder(onedrive: str) -> str:
-    """09.LINEやりとり資料 フォルダの SharePoint URL を導出（生スペース＝未エンコードで返す）。
+    """資料・議事ログを置くフォルダの Web URL を導出（生スペース＝未エンコードで返す）。
 
-    http(s) のみ対象（ローカルパスは機械変換不可＝空）。ファイル URL は親、フォルダ URL はそのまま。
-    末尾が 09 フォルダでなければ付加。テンプレが encodeURI するので `%20` でなく生スペースで持つ。
+    http(s) のみ対象（ローカルパスは機械変換不可＝空）。OneDrive プロパティは（6/2 以降）
+    常に議事ログ.html のファイル URL である前提で、ファイル URL なら親フォルダを返す。
+    - 新: .../LINE資料/<案件名>/議事ログ.html → .../LINE資料/<案件名>
+    - 旧: .../09.LINEやりとり資料/議事ログ.html → .../09.LINEやりとり資料
+    拡張子が無い（フォルダ URL の）レガシー行はそのまま返す（09 を含むフォルダ URL ＝正）。
+    09 の自動付加はしない（新方式では誤って付加するとリンクが壊れるため）。
+    テンプレが encodeURI するので `%20` でなく生スペースで持つ。
     """
     if not onedrive.startswith(("http://", "https://")):
         return ""
     url = unquote(onedrive).rstrip("/")
     if _has_ext(_basename(url)):
         url = url.rsplit("/", 1)[0]  # ファイル URL → 親フォルダ
-    if LINE_SUBFOLDER not in url.split("/"):
-        url = url + "/" + LINE_SUBFOLDER
     return url
 
 

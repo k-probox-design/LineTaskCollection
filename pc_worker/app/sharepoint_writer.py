@@ -41,20 +41,39 @@ def place_in_case_folder(
     filename: str,
     content: bytes | str,
     overwrite: bool = False,
+    subfolder: str | None = LINE_SUBFOLDER,
+    allow_create: bool = False,
 ) -> tuple[Path, bool]:
-    """案件フォルダ(絶対パス)配下の 09.LINEやりとり資料/ にファイルを書き込む。
+    """案件フォルダ(絶対パス)配下にファイルを書き込む。
 
-    戻り値は (書き込んだパス, 09.LINEやりとり資料 を新規作成したか)。
-    案件フォルダが存在しない場合は FileNotFoundError（CLI 側で case_folder_not_found に変換）。
-    案件フォルダ自体の自動作成はしない（マッチしなければ needs_review 運用）。
+    既定では案件フォルダ直下の 09.LINEやりとり資料/ に書く（@@@ SharePoint 運用）。
+
+    引数:
+      subfolder: 書き込み先サブフォルダ。None または "" のときはサブフォルダを作らず
+                 案件フォルダ直下に書く（個人 OneDrive の LINE資料/<案件名>/ 直下運用）。
+      allow_create: True のとき、案件フォルダが無ければ mkdir(parents=True) で作ってから書く
+                    （個人 OneDrive サイロは自動作成 OK）。False（既定）は無ければ
+                    FileNotFoundError（@@@ の「自動作成 NG → needs_review」運用）。
+
+    戻り値は (書き込んだパス, created)。
+      created は subfolder 有り時は「サブフォルダ(09…)を新規作成したか」、
+      subfolder 無し時は「案件フォルダ自体を新規作成したか」を表す（フィールド名は不変）。
     """
     base = Path(case_folder)
     if not base.is_dir():
-        raise FileNotFoundError(f"case folder not found: {case_folder}")
+        if not allow_create:
+            raise FileNotFoundError(f"case folder not found: {case_folder}")
+        base.mkdir(parents=True, exist_ok=True)
+        created = True
+    else:
+        created = False
 
-    subdir = base / LINE_SUBFOLDER
-    created_subfolder = not subdir.exists()
-    subdir.mkdir(parents=True, exist_ok=True)
+    if subfolder:
+        subdir = base / subfolder
+        created = not subdir.exists()
+        subdir.mkdir(parents=True, exist_ok=True)
+    else:
+        subdir = base
 
     safe_name = _sanitize_filename(filename)
     candidate = subdir / safe_name
@@ -68,8 +87,8 @@ def place_in_case_folder(
     else:
         dest.write_text(content, encoding="utf-8")
 
-    logger.info("[SHAREPOINT] wrote %s (created_subfolder=%s)", dest, created_subfolder)
-    return dest, created_subfolder
+    logger.info("[SHAREPOINT] wrote %s (created=%s)", dest, created)
+    return dest, created
 
 
 def to_onedrive_link(path: Path) -> str | None:

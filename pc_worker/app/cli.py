@@ -159,9 +159,11 @@ def place_file_cmd(
     case_folder: str = typer.Option(..., "--case-folder"),
     title: str = typer.Option(..., "--title"),
     log_date: str = typer.Option(None, "--date"),
+    no_subfolder: bool = typer.Option(False, "--no-subfolder", help="09.LINEやりとり資料 を作らず案件フォルダ直下に置く（個人 OneDrive 運用）"),
+    allow_create: bool = typer.Option(False, "--allow-create", help="案件フォルダが無ければ自動作成する（個人 OneDrive サイロ向け）"),
     log_run_id: str = typer.Option(None, "--log-run-id"),
 ) -> None:
-    """案件フォルダ(絶対パス)配下の 09.LINEやりとり資料/ にファイル配置。"""
+    """案件フォルダ(絶対パス)配下にファイル配置（既定は 09.LINEやりとり資料/、--no-subfolder で直下）。"""
     _init_logging(log_run_id)
     # case_folder / src は Skill から Windows パスで来る。実マウントへ解決してから使う（bug1）。
     maps = settings.path_maps
@@ -173,7 +175,11 @@ def place_file_cmd(
     day = log_date or date.today().isoformat()
     filename = f"{day} {title}{src_path.suffix}"
     try:
-        dest, created = sharepoint_writer.place_in_case_folder(case_folder, filename, src_path.read_bytes())
+        dest, created = sharepoint_writer.place_in_case_folder(
+            case_folder, filename, src_path.read_bytes(),
+            subfolder=None if no_subfolder else sharepoint_writer.LINE_SUBFOLDER,
+            allow_create=allow_create,
+        )
     except FileNotFoundError as e:
         _fail("case_folder_not_found", str(e))
     except Exception as e:
@@ -193,11 +199,14 @@ def write_log_cmd(
     log_date: str = typer.Option(..., "--date"),
     content: str = typer.Option(..., "--content", help="議事ログ本文。'-' で stdin から読む"),
     filename: str = typer.Option(None, "--filename", help="保存ファイル名（既定: '<date> 議事ログ.md'）。HTML 化はここで '<date> 議事ログ.html' を渡す"),
+    no_subfolder: bool = typer.Option(False, "--no-subfolder", help="09.LINEやりとり資料 を作らず案件フォルダ直下に置く（個人 OneDrive 運用）"),
+    allow_create: bool = typer.Option(False, "--allow-create", help="案件フォルダが無ければ自動作成する（個人 OneDrive サイロ向け）"),
     log_run_id: str = typer.Option(None, "--log-run-id"),
 ) -> None:
-    """議事ログを <案件フォルダ>/09.LINEやりとり資料/<filename> に書き込み（固定名・上書き）。
+    """議事ログを <案件フォルダ>/[09.LINEやりとり資料/]<filename> に書き込み（固定名・上書き）。
 
     既定のファイル名は '<date> 議事ログ.md'。--filename で任意名（例 '<date> 議事ログ.html'）を指定できる。
+    既定は 09.LINEやりとり資料/ 配下、--no-subfolder で案件フォルダ直下に書く。
     """
     _init_logging(log_run_id)
     # case_folder は Windows パスで来うる。実マウントへ解決（bug1、write-log も対象）。
@@ -205,7 +214,11 @@ def write_log_cmd(
     text = sys.stdin.read() if content == "-" else content
     out_name = filename or f"{log_date} 議事ログ.md"
     try:
-        dest, created = sharepoint_writer.place_in_case_folder(case_folder, out_name, text, overwrite=True)
+        dest, created = sharepoint_writer.place_in_case_folder(
+            case_folder, out_name, text, overwrite=True,
+            subfolder=None if no_subfolder else sharepoint_writer.LINE_SUBFOLDER,
+            allow_create=allow_create,
+        )
     except FileNotFoundError as e:
         _fail("case_folder_not_found", str(e))
     except Exception as e:
