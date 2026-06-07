@@ -223,6 +223,37 @@ def test_place_file_resolves_windows_case_folder(tmp_path, monkeypatch):
     assert m.call_args.args[0] == "/sessions/s/mnt/@@@/案件"
 
 
+def test_place_file_default_uses_09_subfolder(tmp_path):
+    # 既定（フラグ無し）は subfolder=09…、allow_create=False（後方互換）
+    src = tmp_path / "x.pdf"
+    src.write_bytes(b"%PDF")
+    dest = Path("/mnt/c/案件/A/09.LINEやりとり資料/2026-06-07 見積.pdf")
+    with patch("app.cli.sharepoint_writer.place_in_case_folder", return_value=(dest, True)) as m, \
+         patch("app.cli.sharepoint_writer.to_onedrive_link", return_value=None):
+        result = runner.invoke(app, [
+            "place-file", "--src", str(src), "--case-folder", "/mnt/c/案件/A", "--title", "見積",
+        ])
+    assert result.exit_code == 0
+    assert m.call_args.kwargs["subfolder"] == "09.LINEやりとり資料"
+    assert m.call_args.kwargs["allow_create"] is False
+
+
+def test_place_file_no_subfolder_and_allow_create(tmp_path):
+    # 個人 OneDrive 運用: --no-subfolder で subfolder=None、--allow-create で allow_create=True
+    src = tmp_path / "x.pdf"
+    src.write_bytes(b"%PDF")
+    dest = Path("/mnt/c/LINE資料/A/2026-06-07 見積.pdf")
+    with patch("app.cli.sharepoint_writer.place_in_case_folder", return_value=(dest, True)) as m, \
+         patch("app.cli.sharepoint_writer.to_onedrive_link", return_value=None):
+        result = runner.invoke(app, [
+            "place-file", "--src", str(src), "--case-folder", "/mnt/c/LINE資料/A",
+            "--title", "見積", "--no-subfolder", "--allow-create",
+        ])
+    assert result.exit_code == 0
+    assert m.call_args.kwargs["subfolder"] is None
+    assert m.call_args.kwargs["allow_create"] is True
+
+
 def test_place_file_case_folder_not_found(tmp_path):
     src = tmp_path / "x.pdf"
     src.write_bytes(b"%PDF")
@@ -258,6 +289,32 @@ def test_write_log_custom_filename_for_html():
     assert result.exit_code == 0
     assert m.call_args.args[1] == "2026-05-30 議事ログ.html"
     assert m.call_args.kwargs.get("overwrite") is True
+
+
+def test_write_log_no_subfolder_and_allow_create():
+    dest = Path("/mnt/c/LINE資料/A/議事ログ.html")
+    with patch("app.cli.sharepoint_writer.place_in_case_folder", return_value=(dest, True)) as m:
+        result = runner.invoke(app, [
+            "write-log", "--case-folder", "/mnt/c/LINE資料/A", "--date", "2026-06-07",
+            "--content", "<html>x</html>", "--filename", "議事ログ.html",
+            "--no-subfolder", "--allow-create",
+        ])
+    assert result.exit_code == 0
+    assert m.call_args.kwargs["subfolder"] is None
+    assert m.call_args.kwargs["allow_create"] is True
+    assert m.call_args.kwargs.get("overwrite") is True
+    assert m.call_args.args[1] == "議事ログ.html"
+
+
+def test_write_log_default_uses_09_subfolder():
+    dest = Path("/mnt/c/案件/A/09.LINEやりとり資料/2026-06-07 議事ログ.md")
+    with patch("app.cli.sharepoint_writer.place_in_case_folder", return_value=(dest, False)) as m:
+        result = runner.invoke(app, [
+            "write-log", "--case-folder", "/mnt/c/案件/A", "--date", "2026-06-07", "--content", "# log",
+        ])
+    assert result.exit_code == 0
+    assert m.call_args.kwargs["subfolder"] == "09.LINEやりとり資料"
+    assert m.call_args.kwargs["allow_create"] is False
 
 
 def test_write_log_resolves_windows_case_folder(monkeypatch):
