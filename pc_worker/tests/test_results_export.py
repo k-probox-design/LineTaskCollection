@@ -110,6 +110,38 @@ def test_build_rows_onedrive_personal_log_html_new_layout():
         "Documents/@@設計/51.LINE投稿ボット/LINE資料/佐藤邸 新築/議事ログ.html")
 
 
+def test_build_rows_new_folder_url_passthrough():
+    # 新方式（2026-06-11）: OneDrive 欄＝案件フォルダ URL（拡張子なし・09 なし）→ そのまま素通し。
+    # JS の fileUrl = folder + "/" + fname、logUrl = folder + "/議事ログ.html" が壊れずに組める。
+    base = ("https://begin419671-my.sharepoint.com/personal/k_nakamura_begin-e_co_jp/"
+            "Documents/@@設計/51.LINE投稿ボット/LINE資料/案件A")
+    note = "案件: 案件A\nファイル: 2026-06-11 見積書.pdf\n確信度: 高"
+    row = results_export.build_rows([_page("p", "【LINE】案件A ｜[見積] 見積書 (06-11)",
+                                           note=note, onedrive=base)])[0]
+    assert row["folder"] == base                       # フォルダ URL 素通し（親へ降りない）
+    assert "09.LINEやりとり資料" not in row["folder"]   # 09 を勝手に足さない
+    assert "%2520" not in row["folder"] and "%20" not in row["folder"]
+    assert row["fname"] == "2026-06-11 見積書.pdf"
+    assert row["folder"] + "/議事ログ.html" == base + "/議事ログ.html"
+    assert row["folder"] + "/" + row["fname"] == base + "/2026-06-11 見積書.pdf"
+
+
+def test_build_rows_new_folder_url_trailing_slash():
+    # 末尾スラッシュ付きフォルダ URL → rstrip で吸収し、上と同じ folder。
+    base = ("https://begin419671-my.sharepoint.com/personal/k_nakamura_begin-e_co_jp/"
+            "Documents/@@設計/51.LINE投稿ボット/LINE資料/案件A")
+    row = results_export.build_rows([_page("p", "【LINE】案件A ｜[見積] 見積書 (06-11)",
+                                           note="案件: 案件A", onedrive=base + "/")])[0]
+    assert row["folder"] == base
+    assert not row["folder"].endswith("/")
+
+
+def test_derive_folder_clean_log_html_parent_no_09():
+    # 旧（議事ログ.html・09 を含まない単純ケース）: .../案件B/議事ログ.html → 親 .../案件B（09 を足さない）
+    url = "https://x/sites/y/案件B/議事ログ.html"
+    assert results_export._derive_folder(url) == "https://x/sites/y/案件B"
+
+
 def test_derive_folder_legacy_folder_url_with_09_kept():
     # レガシー: 拡張子なし・09 を含むフォルダ URL → そのまま（親へ降りない）
     url = "https://x/sites/y/案件A/09.LINEやりとり資料"
