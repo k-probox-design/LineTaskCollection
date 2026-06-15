@@ -131,15 +131,48 @@ def test_update_task_passes_priority():
     with patch("app.cli.notion_writer.update_task", return_value={"page_id": "p", "updated_fields": ["priority"]}) as m:
         result = runner.invoke(app, ["update-task", "--page-id", "p", "--priority", "高"])
     assert result.exit_code == 0
-    m.assert_called_once_with("p", None, None, "高", None, None, None, None)
+    m.assert_called_once_with("p", None, None, "高", None, None, None, None, None)
 
 
 def test_update_task_passes_status():
     with patch("app.cli.notion_writer.update_task", return_value={"page_id": "p", "updated_fields": ["status"]}) as m:
         result = runner.invoke(app, ["update-task", "--page-id", "p", "--status", "完了"])
     assert result.exit_code == 0
-    # 引数順: page_id, case, title, priority, note, onedrive_link, status, assignee_user_id
-    assert m.call_args.args == ("p", None, None, None, None, None, "完了", None)
+    # 引数順: page_id, case, title, priority, note, onedrive_link, status, assignee_user_id, completed_date
+    assert m.call_args.args == ("p", None, None, None, None, None, "完了", None, None)
+
+
+def test_update_task_passes_completed_date():
+    with patch("app.cli.notion_writer.update_task", return_value={"page_id": "p", "updated_fields": ["completed_date"]}) as m:
+        result = runner.invoke(app, ["update-task", "--page-id", "p", "--completed-date", "2026-06-16"])
+    assert result.exit_code == 0
+    # completed_date は引数の最後（9 番目）
+    assert m.call_args.args == ("p", None, None, None, None, None, None, None, "2026-06-16")
+
+
+def test_find_task_passes_args_and_outputs():
+    sample = [{"page_id": "p1", "title": "甲賀　レイアウト【済】　単線結線図【済】",
+               "note_excerpt": "案件: ニッコン_甲賀営業所", "last_edited": "2026-06-15T00:00:00Z"}]
+    with patch("app.cli.notion_writer.find_tasks", return_value=sample) as m:
+        result = runner.invoke(app, ["find-task", "--query", "甲賀", "--days", "30", "--limit", "5"])
+    assert result.exit_code == 0
+    assert _stdout_json(result) == sample
+    m.assert_called_once_with("甲賀", 30, 5)
+
+
+def test_find_task_defaults():
+    with patch("app.cli.notion_writer.find_tasks", return_value=[]) as m:
+        result = runner.invoke(app, ["find-task", "--query", "岩沼"])
+    assert result.exit_code == 0
+    assert _stdout_json(result) == []
+    m.assert_called_once_with("岩沼", 90, 20)  # 既定 days=90 / limit=20
+
+
+def test_find_task_failure_emits_error():
+    with patch("app.cli.notion_writer.find_tasks", side_effect=RuntimeError("notion down")):
+        result = runner.invoke(app, ["find-task", "--query", "x"])
+    assert result.exit_code != 0
+    assert _stderr_json(result)["error"] == "find-task failed"
 
 
 def test_list_case_folders_outputs_array():
