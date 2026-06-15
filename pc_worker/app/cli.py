@@ -116,15 +116,38 @@ def update_task_cmd(
     note: str = typer.Option(None, "--note"),
     onedrive_link: str = typer.Option(None, "--onedrive-link"),
     assignee_user_id: str = typer.Option(None, "--assignee-user-id", help="担当(person)を user_id で設定"),
+    completed_date: str = typer.Option(None, "--completed-date", help="タスク完了日(date 型)を YYYY-MM-DD で設定。status=完了 と併用可"),
     log_run_id: str = typer.Option(None, "--log-run-id"),
 ) -> None:
     """既存タスク row を部分更新。完了化は --status（status 型プロパティ「ステータス」）で行う。"""
     _init_logging(log_run_id)
     try:
-        result = notion_writer.update_task(page_id, case, title, priority, note, onedrive_link, status, assignee_user_id)
+        result = notion_writer.update_task(
+            page_id, case, title, priority, note, onedrive_link, status, assignee_user_id, completed_date
+        )
     except Exception as e:
         _fail("update-task failed", str(e))
     _emit(result)
+
+
+@app.command("find-task")
+def find_task_cmd(
+    query: str = typer.Option(..., "--query", help="拠点名/案件名片/自然文。タイトルと備考(案件: 行)を正規化 fuzzy 一致で突き合わせる"),
+    days: int = typer.Option(90, "--days", help="last_edited_time の探索窓（日）。全件走査が重いとき絞る"),
+    limit: int = typer.Option(20, "--limit"),
+    log_run_id: str = typer.Option(None, "--log-run-id"),
+) -> None:
+    """自然文/拠点名から既存タスクを特定（name → page_id）。候補を JSON 配列で出力。
+
+    タスク名が【LINE】でなくなった（リネーム済みの）行も備考一致で引ける。0 件/多数でも
+    そのまま返し、どれを更新するかの確定は呼び出し側エージェントに委ねる。
+    """
+    _init_logging(log_run_id)
+    try:
+        matches = notion_writer.find_tasks(query, days, limit)
+    except Exception as e:
+        _fail("find-task failed", str(e))
+    _emit(matches)
 
 
 @app.command("list-case-folders")
