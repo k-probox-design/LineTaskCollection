@@ -360,3 +360,23 @@ def test_find_tasks_respects_limit(monkeypatch):
     with patch("app.notion_writer._get_client", return_value=client):
         matches = notion_writer.find_tasks("岩沼", limit=2)
     assert len(matches) == 2
+
+
+def test_find_tasks_matches_case_line_not_full_note(monkeypatch):
+    # 2026-06-16 ライブ受け入れ指摘: 各タスクの [Claude推測] 行に全拠点名が相互参照で載っており、
+    # 備考“全文”一致だと短い拠点名（甲賀等）が 6 拠点全部にヒットしていた。案件: 行の値だけに
+    # 限定し、短名でも一意に近づける。
+    monkeypatch.delenv("NOTION_DATA_SOURCE_ID", raising=False)
+    cross = "[Claude推測] 対象6拠点: 神戸/北上/岩沼/甲賀/枚方/千曲"  # 全タスクに同じ相互参照が載る
+    pages = [
+        _page("g_kobe", "神戸　レイアウト【済】　単線結線図【未】", f"投稿者: X\n案件: ニッコン_神戸営業所\n{cross}"),
+        _page("g_koka", "甲賀　レイアウト【済】　単線結線図【済】", f"投稿者: X\n案件: ニッコン_甲賀営業所\n{cross}"),
+        _page("g_hira", "枚方　レイアウト【未】　単線結線図【未】", f"投稿者: X\n案件: ニッコン_枚方営業所\n{cross}"),
+    ]
+    client = _find_client(pages)
+    with patch("app.notion_writer._get_client", return_value=client):
+        # 案件: 行の値（＋タイトル）だけに一致 → 短い拠点名でも 1 件に絞れる
+        assert [m["page_id"] for m in notion_writer.find_tasks("甲賀")] == ["g_koka"]
+        assert [m["page_id"] for m in notion_writer.find_tasks("枚方")] == ["g_hira"]
+        # 相互参照行(対象6拠点)にしか出ない拠点名は 0 件（備考全文一致なら全件誤ヒットしていた）
+        assert notion_writer.find_tasks("千曲") == []

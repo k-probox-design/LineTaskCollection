@@ -169,6 +169,18 @@ def _note_text(page: dict) -> str:
     return "".join(part.get("plain_text", "") for part in rt).strip()
 
 
+# 備考の「案件: <値>」行（半角/全角コロン両対応）。find_tasks の突き合わせはこの値だけに限定する。
+# 備考“全文”に対して一致させると、[Claude推測] 行の相互参照（対象6拠点: 神戸/…/甲賀/…）に
+# 短い拠点名が部分一致して全件ヒットしてしまうため（2026-06-16 ライブ受け入れ指摘）。
+_CASE_LINE_RE = re.compile(r"^\s*案件\s*[:：]\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _case_value(note: str) -> str:
+    """備考から『案件: <値>』行の値だけを取り出す。無ければ空文字。"""
+    m = _CASE_LINE_RE.search(note or "")
+    return m.group(1) if m else ""
+
+
 def _normalize_for_match(s: str) -> str:
     """fuzzy 一致用の正規化: NFKC（全半角統一）→ 空白除去 → casefold。"""
     s = unicodedata.normalize("NFKC", s or "")
@@ -369,8 +381,12 @@ def find_tasks(query: str, days: int = 90, limit: int = 20) -> list[dict]:
     完了報告で「甲賀」のように拠点名だけ来る運用に対応するための name → page_id 解決手段。
     けいすけはタスク名を「甲賀　レイアウト【済】…」にリネームし【LINE】が消えるため、
     list_line_tasks（title starts_with "【LINE】"）では二度と引けない。よってここでは
-    prefix filter を使わず、タイトル(動的解決)と備考(PROP_NOTE。案件: 行を含む)の両方に対して
+    prefix filter を使わず、タイトル(動的解決)と備考の『案件: <値>』行に対して
     正規化 fuzzy 一致（全半角・空白無視・部分一致）で突き合わせる。
+
+    突き合わせは備考“全文”ではなく『案件:』行の値だけに限定する。全文一致だと [Claude推測] 行の
+    相互参照（対象6拠点: 神戸/…/甲賀/…）に短い拠点名が当たり、全件ヒットしてしまうため
+    （2026-06-16 ライブ受け入れ指摘）。タイトル一致は従来どおり有効。
 
     0 件・多数ヒットいずれもそのまま配列で返し、最終確定は呼び出し側エージェントに委ねる
     （pc_cli は判定しない）。全件走査が重い場合に備え last_edited_time の窓(days)で絞る。
@@ -399,7 +415,8 @@ def find_tasks(query: str, days: int = 90, limit: int = 20) -> list[dict]:
         for page in resp.get("results", []):
             title = _title_text(page)
             note = _note_text(page)
-            if nq and (nq in _normalize_for_match(title) or nq in _normalize_for_match(note)):
+            case_val = _case_value(note)
+            if nq and (nq in _normalize_for_match(title) or nq in _normalize_for_match(case_val)):
                 matches.append({
                     "page_id": page["id"],
                     "title": title,
