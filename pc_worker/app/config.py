@@ -72,6 +72,16 @@ class _Settings:
     def log_output_dir(self) -> str:
         return mounts.resolve_to_unix(os.environ.get("LOG_OUTPUT_DIR", ""), self.path_maps)
 
+    @property
+    def tray_dir(self) -> str:
+        # タスク管理アプリの受け渡しトレイ（JSON を置くと取り込まれる）。send-to-tray の既定出力先。
+        return mounts.resolve_to_unix(os.environ.get("TRAY_DIR", ""), self.path_maps)
+
+    @property
+    def line_log_dir(self) -> str:
+        # LINE 会話ログ md の出力先（collect-logs の既定）。Windows/unix どちらでも書ける。
+        return mounts.resolve_to_unix(os.environ.get("LINE_LOG_DIR", ""), self.path_maps)
+
 
 settings = _Settings()
 

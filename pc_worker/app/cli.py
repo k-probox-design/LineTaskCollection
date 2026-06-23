@@ -8,7 +8,7 @@ from pathlib import Path
 
 import typer
 
-from app import config, folders, mounts, notion_writer, pull, results_export, sharepoint_writer
+from app import config, folders, log_collector, mounts, notion_writer, pull, results_export, sharepoint_writer, tray_writer
 from app.config import settings
 
 # 実績 HTML の既定出力先（Windows パス。winpath 解決を通してから書く）
@@ -32,6 +32,31 @@ def _emit(obj) -> None:
 def _fail(message: str, detail: str = "") -> None:
     sys.stderr.write(json.dumps({"error": message, "detail": detail}, ensure_ascii=False) + "\n")
     raise typer.Exit(code=1)
+
+
+def _format_conversation(entries: list[dict]) -> str:
+    """list_messages の戻り（時系列昇順）を人が読める会話ログ文字列に整形する。
+
+    1 行 = '[受信(JST)] 送信者: 本文 or ファイル名'。受信は UTC ISO を +9h で JST 化する。
+    """
+    jst = timezone(timedelta(hours=9))
+    lines: list[str] = []
+    for e in entries:
+        iso = e.get("received_at")
+        when = ""
+        if iso:
+            try:
+                dt = datetime.fromisoformat(iso)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                when = dt.astimezone(jst).strftime("%Y/%m/%d %H:%M")
+            except (ValueError, TypeError):
+                when = ""
+        who = e.get("sender_display_name") or "(不明)"
+        body = e.get("text") or e.get("file_name") or ""
+        body = " ".join(str(body).split())
+        lines.append(f"[{when}] {who}: {body}".rstrip())
+    return "\n".join(lines)
 
 
 @app.command("pull-pending")
@@ -291,6 +316,92 @@ def export_results_html_cmd(
         "out_windows": config.to_windows(str(out_path)),
         "count": len(rows),
         "generated_at": jst_now,
+    })
+
+
+@app.command("send-to-tray")
+def send_to_tray_cmd(
+    doc_id: str = typer.Option(..., "--doc-id"),
+    case: str = typer.Option(None, "--case"),
+    placed_file: str = typer.Option(None, "--placed-file", help="place-file の destination_windows を渡す想定。トレイの link/添付になる"),
+    with_conversation: bool = typer.Option(False, "--with-conversation", help="同一グループの前後メッセージを会話ログとして同梱する"),
+    window_hours: int = typer.Option(48, "--window-hours", help="--with-conversation の前後窓（時間）"),
+    needs_review: bool = typer.Option(False, "--needs-review", help="要対応を ◎ にする（既定は △）"),
+    out_dir: str = typer.Option(None, "--out-dir", help="トレイの出力先（Windows パス可）。既定は settings.tray_dir"),
+    log_run_id: str = typer.Option(None, "--log-run-id"),
+) -> None:
+    """doc 1 件をタスク管理アプリの受け渡しトレイへ LINE_<source_id>.json として書き出す。"""
+    _init_logging(log_run_id)
+    target = out_dir or settings.tray_dir
+    if not target:
+        _fail("tray dir not set", "--out-dir も TRAY_DIR も未設定です")
+    try:
+        meta = pull.get_meta(doc_id)
+    except Exception as e:
+        _fail("send-to-tray failed", str(e))
+
+    conversation_text = None
+    if with_conversation:
+        group_id = meta.get("group_id")
+        if not group_id:
+            _fail("send-to-tray failed", f"doc に group_id がありません: {doc_id}")
+        try:
+            entries = pull.list_messages(group_id, around_doc=doc_id, window_hours=window_hours)
+        except Exception as e:
+            _fail("send-to-tray failed", str(e))
+        conversation_text = _format_conversation(entries)
+
+    record = tray_writer.build_tray_record(
+        meta,
+        case=case,
+        placed_file_windows=placed_file,
+        conversation_text=conversation_text,
+        needs_review=needs_review,
+    )
+    try:
+        dest = tray_writer.write_tray_file(record, target)
+    except Exception as e:
+        _fail("send-to-tray failed", str(e))
+    unix = str(dest)
+    _emit({
+        "out_unix": unix,
+        "out_windows": config.to_windows(unix),
+        "source_id": record["source_id"],
+    })
+
+
+@app.command("collect-logs")
+def collect_logs_cmd(
+    out_dir: str = typer.Option(None, "--out-dir", help="会話ログmdの出力先（Windowsパス可）。既定は settings.line_log_dir"),
+    limit: int = typer.Option(1000, "--limit"),
+    log_run_id: str = typer.Option(None, "--log-run-id"),
+) -> None:
+    """intake_messages を前回カーソル以降だけ取得し、グループ別 md に追記する（収集のみ・判断しない）。"""
+    _init_logging(log_run_id)
+    target = out_dir or settings.line_log_dir
+    if not target:
+        _fail("line log dir not set", "--out-dir も LINE_LOG_DIR も未設定です")
+    target = mounts.resolve_to_unix(target, settings.path_maps)
+    state = log_collector.read_state(target)
+    since = state.get("last_received")
+    try:
+        entries = pull.list_since(since, limit)
+    except Exception as e:
+        _fail("collect-logs failed", str(e))
+    try:
+        result = log_collector.append_entries(target, entries, pull._group_name)
+    except Exception as e:
+        _fail("collect-logs failed", str(e))
+    received = [e["received_at"] for e in entries if e.get("received_at")]
+    new_cursor = max(received) if received else since
+    if new_cursor != since:
+        log_collector.write_state(target, {"last_received": new_cursor})
+    _emit({
+        "appended": result["appended"],
+        "groups": result["groups"],
+        "files": result["files"],
+        "since": since,
+        "new_cursor": new_cursor,
     })
 
 

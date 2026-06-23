@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from google.cloud import firestore, storage
@@ -107,6 +107,27 @@ def _msg_to_entry(doc) -> dict:
     return {_OPTIONAL_FIELDS.get(k, k): v for k, v in entry.items() if v is not None}
 
 
+def list_since(since_iso: str | None, limit: int = 1000) -> list[dict]:
+    """intake_messages を receivedAt 昇順で、since_iso より新しいものを返す（全グループ横断）。
+
+    since_iso が None なら全件（初回バックフィル）。各要素は _msg_to_entry 形式。
+    """
+    col = _firestore().collection("intake_messages")
+    if since_iso is None:
+        docs = col.order_by("receivedAt").limit(limit).stream()
+    else:
+        since = _as_utc(datetime.fromisoformat(since_iso))
+        docs = (
+            col.where(filter=firestore.FieldFilter("receivedAt", ">", since))
+            .order_by("receivedAt")
+            .limit(limit)
+            .stream()
+        )
+    items = [_msg_to_entry(d) for d in docs]
+    logger.info("[PULL] list_since since=%s returned %d (limit=%d)", since_iso, len(items), limit)
+    return items
+
+
 def list_messages(
     group_id: str,
     around_doc: str | None = None,
@@ -184,6 +205,17 @@ def _group_name(group_id: str) -> str | None:
     except Exception:
         logger.warning("[PULL] intake_groups の groupName 取得に失敗 group=%s", group_id)
     return None
+
+
+def get_meta(doc_id: str) -> dict:
+    """単一 doc のメタを取得（GCS は触らない）。list_pending と同じ整形（_doc_to_meta）で返す。
+
+    存在しなければ ValueError。send-to-tray が doc 1 件分のメタを取るために使う。
+    """
+    snap = _firestore().collection("intake_messages").document(doc_id).get()
+    if not snap.exists:
+        raise ValueError(f"document not found: {doc_id}")
+    return _doc_to_meta(snap)
 
 
 def download(doc_id: str, dest_dir: str) -> Path:
