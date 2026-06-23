@@ -107,24 +107,31 @@ def _msg_to_entry(doc) -> dict:
     return {_OPTIONAL_FIELDS.get(k, k): v for k, v in entry.items() if v is not None}
 
 
-def list_since(since_iso: str | None, limit: int = 1000) -> list[dict]:
+def list_since(since_iso: str | None, limit: int = 1000, inclusive: bool = False) -> list[dict]:
     """intake_messages を receivedAt 昇順で、since_iso より新しいものを返す（全グループ横断）。
 
     since_iso が None なら全件（初回バックフィル）。各要素は _msg_to_entry 形式。
+    inclusive=True のとき境界条件を receivedAt >= since にする（同時刻 doc も取りに行く＝
+    limit で切られた境界の取りこぼし対策。重複排除は呼び出し側 collect-logs が doc_id で行う）。
+    inclusive=False（既定）は従来通り receivedAt > since。
     """
     col = _firestore().collection("intake_messages")
     if since_iso is None:
         docs = col.order_by("receivedAt").limit(limit).stream()
     else:
         since = _as_utc(datetime.fromisoformat(since_iso))
+        op = ">=" if inclusive else ">"
         docs = (
-            col.where(filter=firestore.FieldFilter("receivedAt", ">", since))
+            col.where(filter=firestore.FieldFilter("receivedAt", op, since))
             .order_by("receivedAt")
             .limit(limit)
             .stream()
         )
     items = [_msg_to_entry(d) for d in docs]
-    logger.info("[PULL] list_since since=%s returned %d (limit=%d)", since_iso, len(items), limit)
+    logger.info(
+        "[PULL] list_since since=%s inclusive=%s returned %d (limit=%d)",
+        since_iso, inclusive, len(items), limit,
+    )
     return items
 
 

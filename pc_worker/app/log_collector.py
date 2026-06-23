@@ -6,6 +6,7 @@ out_dir を渡す前提で、本モジュールは解決済みパスを Path で
 """
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -115,7 +116,11 @@ def read_state(out_dir) -> dict:
 
 
 def write_state(out_dir, state: dict) -> None:
+    # 一時ファイルに書いて os.replace で原子的に置換する（書込中にクラッシュしても
+    # 既存の .collect_state.json を壊さない）。export-results-html と同じ作法。
     base = Path(out_dir)
     base.mkdir(parents=True, exist_ok=True)
     path = base / _STATE_FILE
-    path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)

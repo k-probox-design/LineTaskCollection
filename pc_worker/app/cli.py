@@ -374,9 +374,18 @@ def send_to_tray_cmd(
 def collect_logs_cmd(
     out_dir: str = typer.Option(None, "--out-dir", help="会話ログmdの出力先（Windowsパス可）。既定は settings.line_log_dir"),
     limit: int = typer.Option(1000, "--limit"),
+    force_backfill: bool = typer.Option(
+        False, "--force-backfill",
+        help="state(.collect_state.json) が無く既に md がある場合でも、全件バックフィルを強行する（意図的な取り直し用）",
+    ),
     log_run_id: str = typer.Option(None, "--log-run-id"),
 ) -> None:
-    """intake_messages を前回カーソル以降だけ取得し、グループ別 md に追記する（収集のみ・判断しない）。"""
+    """intake_messages を前回カーソル以降だけ取得し、グループ別 md に追記する（収集のみ・判断しない）。
+
+    doc_id で冪等（取りこぼさない・二重にしない）に収集する。境界（last_received と同時刻の doc）を
+    boundary_ids として state に持ち、次回 inclusive(>=) で取り直して doc_id で除外する。
+    1 回の呼び出しで limit を跨いで取り切る（ドレイン）。
+    """
     _init_logging(log_run_id)
     target = out_dir or settings.line_log_dir
     if not target:
@@ -384,24 +393,91 @@ def collect_logs_cmd(
     target = mounts.resolve_to_unix(target, settings.path_maps)
     state = log_collector.read_state(target)
     since = state.get("last_received")
-    try:
-        entries = pull.list_since(since, limit)
-    except Exception as e:
-        _fail("collect-logs failed", str(e))
-    try:
-        result = log_collector.append_entries(target, entries, pull._group_name)
-    except Exception as e:
-        _fail("collect-logs failed", str(e))
-    received = [e["received_at"] for e in entries if e.get("received_at")]
-    new_cursor = max(received) if received else since
-    if new_cursor != since:
-        log_collector.write_state(target, {"last_received": new_cursor})
+
+    # state 消失ガード: cursor が無いのに既存 md がある＝state が消えた/壊れた疑い。
+    # 黙って全件追記すると md に履歴がまるごと二重で入るため、--force-backfill が無ければ
+    # 収集をスキップして exit 0（自動実行を黙って止めず、かつ二重もしない＝安全側）。
+    if since is None and not force_backfill:
+        existing_md = list(Path(target).glob("*.md")) if Path(target).exists() else []
+        if existing_md:
+            sys.stderr.write(
+                "state(.collect_state.json) が見つからず、既に会話ログmdがあります。"
+                "二重取り込み防止のため収集をスキップしました。"
+                "意図的に取り直す場合は --force-backfill を付けてください。\n"
+            )
+            _emit({
+                "appended": 0,
+                "groups": {},
+                "files": [],
+                "since": None,
+                "new_cursor": None,
+                "skipped": "state_missing_guard",
+            })
+            return
+
+    cursor = since
+    boundary: set[str] = set(state.get("boundary_ids") or [])
+    total_appended = 0
+    groups: dict[str, int] = {}
+    files: list[str] = []
+
+    while True:
+        try:
+            # cursor があり、かつ除外用 boundary を持つときだけ >=（inclusive）。
+            # 旧形式 state(boundary 無し) の初回は厳密 >(False) で境界 doc を取りに行かず二重追記を防ぐ。
+            # boundary はバッチごとに更新されるため、毎反復でこの式を評価する。
+            batch = pull.list_since(cursor, limit, inclusive=(cursor is not None and bool(boundary)))
+        except Exception as e:
+            _fail("collect-logs failed", str(e))
+        if not batch:
+            break
+
+        # 既に書いた境界 doc を除外＝二重書きしない（冪等）。
+        fresh = [e for e in batch if e.get("doc_id") not in boundary]
+        if fresh:
+            try:
+                result = log_collector.append_entries(target, fresh, pull._group_name)
+            except Exception as e:
+                _fail("collect-logs failed", str(e))
+            total_appended += result["appended"]
+            for g, n in result["groups"].items():
+                groups[g] = groups.get(g, 0) + n
+            for f in result["files"]:
+                if f not in files:
+                    files.append(f)
+
+        # batch の doc は order_by receivedAt のため received_at を必ず持つ。
+        batch_max = max(e["received_at"] for e in batch)
+        new_boundary = {e["doc_id"] for e in batch if e["received_at"] == batch_max}
+        if batch_max == cursor:
+            # 境界が同一時刻のまま続く（limit 内に同時刻が収まらない）→ 蓄積する。
+            new_boundary |= boundary
+
+        # 無限ループ防止: batch 全件が batch_max と同時刻 かつ fresh が空 かつ満杯
+        #（＝同一時刻に limit 超の異常）なら、これ以上前進できないので打ち切る。
+        all_same_time = all(e["received_at"] == batch_max for e in batch)
+        if all_same_time and not fresh and len(batch) >= limit:
+            cursor, boundary = batch_max, new_boundary
+            log_collector.write_state(
+                target, {"last_received": cursor, "boundary_ids": sorted(boundary)}
+            )
+            break
+
+        cursor, boundary = batch_max, new_boundary
+        # 各バッチ後に state を保存（部分失敗しても次回 inclusive＋boundary で冪等）。
+        log_collector.write_state(
+            target, {"last_received": cursor, "boundary_ids": sorted(boundary)}
+        )
+
+        if len(batch) < limit:
+            break  # 取り切った
+
     _emit({
-        "appended": result["appended"],
-        "groups": result["groups"],
-        "files": result["files"],
+        "appended": total_appended,
+        "groups": groups,
+        "files": files,
         "since": since,
-        "new_cursor": new_cursor,
+        "new_cursor": cursor,
     })
 
 
